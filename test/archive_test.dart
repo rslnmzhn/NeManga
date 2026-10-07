@@ -11,7 +11,7 @@ void main() {
     final archive = Archive();
     archive.addFile(ArchiveFile('img_01.jpg', 4, [10, 20, 30, 40]));
     archive.addFile(ArchiveFile('img_02.png', 4, [50, 60, 70, 80]));
-    final bytes = encoder.encode(archive)!;
+    final bytes = encoder.encode(archive);
     zipFile.writeAsBytesSync(bytes);
 
     final inputStream = InputFileStream(zipFile.path);

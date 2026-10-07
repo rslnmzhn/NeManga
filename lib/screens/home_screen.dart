@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
 import '../services/storage_service.dart';
+import '../services/update_service.dart';
+import '../widgets/update_dialog.dart';
 import 'reader_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -22,6 +24,32 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkUpdate(silent: true);
+    });
+  }
+
+  Future<void> _checkUpdate({bool silent = false}) async {
+    try {
+      final update = await UpdateService.checkForUpdate();
+      if (!mounted) return;
+      if (update != null) {
+        UpdateDialog.show(context, update);
+      } else if (!silent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('У вас установлена последняя версия NeManga'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка проверки обновлений: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _loadData() async {
@@ -214,6 +242,11 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.system_update_alt_rounded),
+            tooltip: 'Проверить обновления',
+            onPressed: () => _checkUpdate(silent: false),
+          ),
           IconButton(
             icon: const Icon(Icons.cleaning_services_outlined),
             tooltip: 'Очистить кэш',
