@@ -10,10 +10,14 @@ usage() {
   cat <<'EOF'
 Usage: resolve_release_version.sh [--dry-run] [--github-output PATH] [--pubspec PATH]
 
-Resolves the release version and Android versionCode:
-- Reads base version from pubspec.yaml (e.g. 1.0.0).
-- If v${BASE_VERSION} does not exist, uses v${BASE_VERSION}.
-- If v${BASE_VERSION} exists, increments fix counter (v${BASE_VERSION}_fix1, etc).
+Resolve the stable release version for the normal release workflow:
+- If no stable vX.Y.Z tags exist, bootstrap from pubspec.yaml X.Y.Z (0.0.1).
+- Otherwise bump the patch segment of the highest stable vX.Y.Z tag.
+- The decimal release convention carries patch and minor after 9:
+    0.0.1 -> 0.0.2 -> ... -> 0.0.9 -> 0.1.0 -> ... -> 0.9.9 -> 1.0.0
+
+Android versionCode uses:
+  major * 1000000 + minor * 1000 + patch
 EOF
 }
 
@@ -48,48 +52,68 @@ if [[ ! -f "${PUBSPEC_PATH}" ]]; then
   exit 1
 fi
 
-BASE_VERSION="$(
+PUBSPEC_VERSION="$(
   sed -n -E 's/^[[:space:]]*version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)(\+[0-9]+)?[[:space:]]*\r?$/\1/p' "${PUBSPEC_PATH}" \
     | head -n 1
 )"
 
-if [[ -z "${BASE_VERSION}" ]]; then
-  echo "Unable to read base semver from ${PUBSPEC_PATH}" >&2
+if [[ -z "${PUBSPEC_VERSION}" ]]; then
+  echo "Unable to read stable semver from ${PUBSPEC_PATH}" >&2
   exit 1
 fi
 
 git -C "${ROOT_DIR}" fetch --tags --force >/dev/null 2>&1 || true
 
-# Check if base tag v1.0.0 exists
-if ! git -C "${ROOT_DIR}" rev-parse -q --verify "refs/tags/v${BASE_VERSION}" >/dev/null 2>&1; then
-  RELEASE_VERSION="${BASE_VERSION}"
-  RELEASE_TAG="v${BASE_VERSION}"
-  NEXT_FIX=0
+LATEST_STABLE_VERSION="$(
+  git -C "${ROOT_DIR}" tag --list "v[0-9]*.[0-9]*.[0-9]*" \
+    | sed -n -E 's/^v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' \
+    | sort -V \
+    | tail -n 1
+)"
+
+if [[ -z "${LATEST_STABLE_VERSION}" ]]; then
+  RELEASE_VERSION="${PUBSPEC_VERSION}"
 else
-  LATEST_FIX="$(
-    git -C "${ROOT_DIR}" tag --list "v${BASE_VERSION}_fix*" \
-      | sed -n -E "s/^v${BASE_VERSION//./\\.}_fix([0-9]+)$/\\1/p" \
-      | sort -n \
-      | tail -n 1
-  )"
-
-  if [[ -z "${LATEST_FIX}" ]]; then
-    NEXT_FIX=1
-  else
-    NEXT_FIX=$((LATEST_FIX + 1))
+  IFS='.' read -r MAJOR MINOR PATCH <<<"${LATEST_STABLE_VERSION}"
+  PATCH=$((PATCH + 1))
+  if (( PATCH > 9 )); then
+    PATCH=0
+    MINOR=$((MINOR + 1))
   fi
-
-  RELEASE_VERSION="${BASE_VERSION}_fix${NEXT_FIX}"
-  RELEASE_TAG="v${RELEASE_VERSION}"
+  if (( MINOR > 9 )); then
+    MINOR=0
+    MAJOR=$((MAJOR + 1))
+  fi
+  RELEASE_VERSION="${MAJOR}.${MINOR}.${PATCH}"
 fi
 
-IFS='.' read -r MAJOR MINOR PATCH <<<"${BASE_VERSION}"
-BASE_CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
-ANDROID_VERSION_CODE=$((BASE_CODE * 100 + NEXT_FIX))
+IFS='.' read -r MAJOR MINOR PATCH <<<"${RELEASE_VERSION}"
+for segment in "${MAJOR}" "${MINOR}" "${PATCH}"; do
+  if ! [[ "${segment}" =~ ^[0-9]+$ ]]; then
+    echo "Release version contains a non-numeric segment: ${RELEASE_VERSION}" >&2
+    exit 1
+  fi
+done
+
+ANDROID_VERSION_CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
 ANDROID_VERSION_CODE_LIMIT=2100000000
 if (( ANDROID_VERSION_CODE <= 0 || ANDROID_VERSION_CODE > ANDROID_VERSION_CODE_LIMIT )); then
   echo "Computed Android versionCode ${ANDROID_VERSION_CODE} exceeds supported range." >&2
   exit 1
+fi
+
+RELEASE_TAG="v${RELEASE_VERSION}"
+
+if git -C "${ROOT_DIR}" rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+  echo "Resolved stable tag already exists locally: ${RELEASE_TAG}" >&2
+  exit 1
+fi
+
+if git -C "${ROOT_DIR}" remote get-url origin >/dev/null 2>&1; then
+  if git -C "${ROOT_DIR}" ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+    echo "Resolved stable tag already exists on origin: ${RELEASE_TAG}" >&2
+    exit 1
+  fi
 fi
 
 if [[ -n "${OUTPUT_FILE}" ]]; then

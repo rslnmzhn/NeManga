@@ -24,7 +24,7 @@ class AppUpdateInfo {
 
 class UpdateService {
   static const MethodChannel _channel = MethodChannel('com.nemanga.reader/updater');
-  static const String currentVersion = '1.0.0';
+  static const String currentVersion = '0.0.1';
   static const String repoOwner = 'rslnmzhn';
   static const String repoName = 'NeManga';
 
