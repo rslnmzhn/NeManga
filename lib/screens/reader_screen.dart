@@ -135,6 +135,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       filePath: widget.archivePath,
       currentPage: _currentPage,
       totalPages: widget.pagePaths.length,
+      coverPath: widget.pagePaths.isNotEmpty ? widget.pagePaths.first : null,
     );
   }
 

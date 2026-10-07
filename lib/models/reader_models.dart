@@ -102,6 +102,9 @@ class BookMetadata {
   final int lastPage;
   final DateTime lastReadTime;
   final int fileSize;
+  final String? coverPath;
+  final List<String> tags;
+  final bool isOptimized;
 
   BookMetadata({
     required this.filePath,
@@ -110,6 +113,9 @@ class BookMetadata {
     required this.lastPage,
     required this.lastReadTime,
     required this.fileSize,
+    this.coverPath,
+    this.tags = const [],
+    this.isOptimized = false,
   });
 
   BookMetadata copyWith({
@@ -119,6 +125,9 @@ class BookMetadata {
     int? lastPage,
     DateTime? lastReadTime,
     int? fileSize,
+    String? coverPath,
+    List<String>? tags,
+    bool? isOptimized,
   }) {
     return BookMetadata(
       filePath: filePath ?? this.filePath,
@@ -127,6 +136,9 @@ class BookMetadata {
       lastPage: lastPage ?? this.lastPage,
       lastReadTime: lastReadTime ?? this.lastReadTime,
       fileSize: fileSize ?? this.fileSize,
+      coverPath: coverPath ?? this.coverPath,
+      tags: tags ?? this.tags,
+      isOptimized: isOptimized ?? this.isOptimized,
     );
   }
 
@@ -138,6 +150,9 @@ class BookMetadata {
       'lastPage': lastPage,
       'lastReadTime': lastReadTime.millisecondsSinceEpoch,
       'fileSize': fileSize,
+      'coverPath': coverPath,
+      'tags': tags,
+      'isOptimized': isOptimized,
     };
   }
 
@@ -151,6 +166,9 @@ class BookMetadata {
         map['lastReadTime'] ?? DateTime.now().millisecondsSinceEpoch,
       ),
       fileSize: map['fileSize'] ?? 0,
+      coverPath: map['coverPath'],
+      tags: (map['tags'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+      isOptimized: map['isOptimized'] ?? false,
     );
   }
 

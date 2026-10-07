@@ -1,9 +1,12 @@
+import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
 import '../services/storage_service.dart';
 import '../services/update_service.dart';
+import '../widgets/compress_dialog.dart';
+import '../widgets/edit_book_dialog.dart';
 import '../widgets/update_dialog.dart';
 import 'reader_screen.dart';
 
@@ -15,7 +18,13 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  List<BookMetadata> _recentBooks = [];
+  List<BookMetadata> _allBooks = [];
+  List<BookMetadata> _filteredBooks = [];
+  List<String> _allTags = [];
+  String? _selectedTag;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+
   bool _isLoading = false;
   String _loadingMessage = '';
   ReaderSettings _settings = const ReaderSettings();
@@ -27,6 +36,12 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkUpdate(silent: true);
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _checkUpdate({bool silent = false}) async {
@@ -55,12 +70,28 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadData() async {
     final settings = await StorageService.loadSettings();
     final recents = await StorageService.getRecentBooks();
+    final tags = await StorageService.getAllTags();
+
     if (mounted) {
       setState(() {
         _settings = settings;
-        _recentBooks = recents;
+        _allBooks = recents;
+        _allTags = tags;
+        _applyFilter();
       });
     }
+  }
+
+  void _applyFilter() {
+    _filteredBooks = _allBooks.where((book) {
+      final matchesSearch = _searchQuery.isEmpty ||
+          book.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          book.tags.any((t) => t.toLowerCase().contains(_searchQuery.toLowerCase()));
+
+      final matchesTag = _selectedTag == null || book.tags.contains(_selectedTag);
+
+      return matchesSearch && matchesTag;
+    }).toList();
   }
 
   Future<void> _pickAndOpenArchive() async {
@@ -76,7 +107,6 @@ class _HomeScreenState extends State<HomeScreen> {
         await _openManga(filePath);
       }
     } catch (e) {
-      // Если кастомный фильтр не сработал на некоторых версиях Android SAF, пробуем FileType.any
       try {
         final fallbackFiles = await FilePicker.pickFiles(
           type: FileType.any,
@@ -108,6 +138,14 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final info = await ArchiveService.loadManga(filePath);
 
+      // Сохраняем обложку в метаданные книги
+      await StorageService.saveBookProgress(
+        filePath: filePath,
+        currentPage: initialPage,
+        totalPages: info.pagePaths.length,
+        coverPath: info.coverPath,
+      );
+
       if (!mounted) return;
       setState(() {
         _isLoading = false;
@@ -126,7 +164,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
 
-      // При возвращении на главный экран обновляем список недавних
+      // При возвращении на главный экран обновляем библиотеку
       await _loadData();
     } catch (e) {
       if (mounted) {
@@ -199,17 +237,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${size.toStringAsFixed(1)} ${suffixes[i]}';
   }
 
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    final diff = now.difference(date);
-
-    if (diff.inMinutes < 1) return 'Только что';
-    if (diff.inHours < 1) return '${diff.inMinutes} мин назад';
-    if (diff.inDays < 1) return '${diff.inHours} ч назад';
-    if (diff.inDays == 1) return 'Вчера';
-    return '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -225,7 +252,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: primary.withOpacity(0.18),
+                color: primary.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(Icons.menu_book_rounded, color: primary, size: 22),
@@ -249,7 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.cleaning_services_outlined),
-            tooltip: 'Очистить кэш',
+            tooltip: 'Очистить кэш страниц',
             onPressed: _confirmClearCache,
           ),
         ],
@@ -258,48 +285,82 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           RefreshIndicator(
             onRefresh: _loadData,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              children: [
-                // Главная карточка открытия архива
-                _buildOpenArchiveCard(primary),
-                const SizedBox(height: 24),
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Карточка выбора нового архива
+                        _buildOpenArchiveCard(primary),
+                        const SizedBox(height: 16),
 
-                // Заголовок секции недавних
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Недавнее чтение',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
+                        // Поиск и фильтры по тегам
+                        if (_allBooks.isNotEmpty) ...[
+                          _buildSearchBar(),
+                          const SizedBox(height: 12),
+                          _buildTagsFilterRow(primary),
+                          const SizedBox(height: 16),
+                        ],
+
+                        // Заголовок библиотеки
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              _selectedTag != null ? 'Тег: #$_selectedTag' : 'Библиотека манги',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            if (_filteredBooks.isNotEmpty)
+                              Text(
+                                '${_filteredBooks.length} шт.',
+                                style: const TextStyle(fontSize: 14, color: Colors.grey),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Сетка с большими превьюшками манги
+                if (_filteredBooks.isEmpty)
+                  SliverToBoxAdapter(child: _buildEmptyState())
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    sliver: SliverGrid(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        childAspectRatio: 0.56,
+                        crossAxisSpacing: 14,
+                        mainAxisSpacing: 14,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final book = _filteredBooks[index];
+                          return _buildLargeMangaCard(book, primary);
+                        },
+                        childCount: _filteredBooks.length,
                       ),
                     ),
-                    if (_recentBooks.isNotEmpty)
-                      Text(
-                        '${_recentBooks.length} шт.',
-                        style: const TextStyle(fontSize: 14, color: Colors.grey),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Список или пустое состояние
-                if (_recentBooks.isEmpty)
-                  _buildEmptyState()
-                else
-                  ..._recentBooks.map((book) => _buildBookCard(book, primary)),
-                const SizedBox(height: 32),
+                  ),
+                const SliverToBoxAdapter(child: SizedBox(height: 40)),
               ],
             ),
           ),
 
-          // Оверлей загрузки при распаковке архива
+          // Оверлей загрузки
           if (_isLoading)
             Container(
-              color: Colors.black.withOpacity(0.75),
+              color: Colors.black.withValues(alpha: 0.75),
               child: Center(
                 child: Container(
                   padding: const EdgeInsets.all(24),
@@ -331,22 +392,103 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildSearchBar() {
+    return TextField(
+      controller: _searchController,
+      onChanged: (val) {
+        setState(() {
+          _searchQuery = val;
+          _applyFilter();
+        });
+      },
+      decoration: InputDecoration(
+        hintText: 'Поиск манги или тега...',
+        prefixIcon: const Icon(Icons.search, color: Colors.grey, size: 20),
+        suffixIcon: _searchQuery.isNotEmpty
+            ? IconButton(
+                icon: const Icon(Icons.clear, size: 18),
+                onPressed: () {
+                  _searchController.clear();
+                  setState(() {
+                    _searchQuery = '';
+                    _applyFilter();
+                  });
+                },
+              )
+            : null,
+        filled: true,
+        fillColor: const Color(0xFF161920),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTagsFilterRow(Color primary) {
+    if (_allTags.isEmpty) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 36,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          ChoiceChip(
+            label: const Text('Все'),
+            selected: _selectedTag == null,
+            onSelected: (selected) {
+              if (selected) {
+                setState(() {
+                  _selectedTag = null;
+                  _applyFilter();
+                });
+              }
+            },
+          ),
+          const SizedBox(width: 8),
+          ..._allTags.map((tag) {
+            final isSelected = _selectedTag == tag;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text('#$tag'),
+                selected: isSelected,
+                onSelected: (selected) {
+                  setState(() {
+                    _selectedTag = selected ? tag : null;
+                    _applyFilter();
+                  });
+                },
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   Widget _buildOpenArchiveCard(Color primary) {
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            primary.withOpacity(0.25),
+            primary.withValues(alpha: 0.25),
             const Color(0xFF1E232D),
           ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: primary.withOpacity(0.3), width: 1.5),
+        border: Border.all(color: primary.withValues(alpha: 0.3), width: 1.5),
         boxShadow: [
-          BoxModShadow(
-            color: primary.withOpacity(0.12),
+          BoxShadow(
+            color: primary.withValues(alpha: 0.12),
             blurRadius: 18,
             offset: const Offset(0, 6),
           ),
@@ -358,17 +500,17 @@ class _HomeScreenState extends State<HomeScreen> {
           borderRadius: BorderRadius.circular(20),
           onTap: _pickAndOpenArchive,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
             child: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     color: primary,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: primary.withOpacity(0.4),
+                        color: primary.withValues(alpha: 0.4),
                         blurRadius: 12,
                         offset: const Offset(0, 4),
                       ),
@@ -377,7 +519,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: const Icon(
                     Icons.folder_zip_outlined,
                     color: Colors.white,
-                    size: 32,
+                    size: 28,
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -389,25 +531,25 @@ class _HomeScreenState extends State<HomeScreen> {
                         'Открыть архив манги',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 17,
+                          fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 3),
                       Text(
                         'Поддерживаются .zip и .cbz архивы',
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.7),
-                          fontSize: 13,
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 12,
                         ),
                       ),
                     ],
                   ),
                 ),
                 Icon(
-                  Icons.arrow_forward_ios_rounded,
-                  color: Colors.white.withOpacity(0.5),
-                  size: 18,
+                  Icons.add_circle_outline,
+                  color: Colors.white.withValues(alpha: 0.8),
+                  size: 24,
                 ),
               ],
             ),
@@ -424,18 +566,18 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFF16181E),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
       child: Column(
         children: [
           Icon(
             Icons.auto_stories_outlined,
             size: 64,
-            color: Colors.white.withOpacity(0.3),
+            color: Colors.white.withValues(alpha: 0.3),
           ),
           const SizedBox(height: 16),
           const Text(
-            'История чтения пуста',
+            'Библиотека пуста',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
@@ -444,11 +586,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Нажмите кнопку выше, чтобы выбрать zip или cbz архив с мангой на устройстве.',
+            _searchQuery.isNotEmpty || _selectedTag != null
+                ? 'По вашему запросу ничего не найдено.'
+                : 'Нажмите кнопку выше, чтобы открыть первый zip/cbz архив.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 13,
-              color: Colors.white.withOpacity(0.45),
+              color: Colors.white.withValues(alpha: 0.45),
             ),
           ),
         ],
@@ -456,57 +600,208 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildBookCard(BookMetadata book, Color primary) {
+  Widget _buildLargeMangaCard(BookMetadata book, Color primary) {
     final progressFraction = book.totalPages > 0
         ? ((book.lastPage + 1) / book.totalPages).clamp(0.0, 1.0)
         : 0.0;
     final percent = (progressFraction * 100).toInt();
 
+    final hasCover = book.coverPath != null && File(book.coverPath!).existsSync();
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF16191E),
+        color: const Color(0xFF171A21),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.07)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => _openManga(book.filePath, initialPage: book.lastPage),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _openManga(book.filePath, initialPage: book.lastPage),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Иконка книги / обложки
-                Container(
-                  width: 52,
-                  height: 64,
-                  decoration: BoxDecoration(
-                    color: primary.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: primary.withOpacity(0.25)),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                // 1. БОЛЬШАЯ ПРЕВЬЮШКА (Обложка первой страницы)
+                Expanded(
+                  child: Stack(
+                    fit: StackFit.expand,
                     children: [
-                      Icon(Icons.import_contacts_rounded, color: primary, size: 26),
-                      const SizedBox(height: 2),
-                      Text(
-                        '$percent%',
-                        style: TextStyle(
-                          color: primary,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                      if (hasCover)
+                        Image.file(
+                          File(book.coverPath!),
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => _buildFallbackCover(primary),
+                        )
+                      else
+                        _buildFallbackCover(primary),
+
+                      // Градиентное затемнение снизу для читаемости
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        height: 60,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.bottomCenter,
+                              end: Alignment.topCenter,
+                              colors: [
+                                Colors.black.withValues(alpha: 0.8),
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Процент прочтения
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.75),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: primary.withValues(alpha: 0.5)),
+                          ),
+                          child: Text(
+                            '$percent%',
+                            style: TextStyle(
+                              color: primary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Бейдж сжатия (если оптимизирован)
+                      if (book.isOptimized)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.greenAccent.withValues(alpha: 0.9),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.bolt, color: Colors.black, size: 12),
+                                SizedBox(width: 2),
+                                Text(
+                                  'WebP',
+                                  style: TextStyle(
+                                    color: Colors.black,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                      // Кнопка контекстного меню
+                      Positioned(
+                        bottom: 4,
+                        right: 4,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: PopupMenuButton<String>(
+                            icon: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.6),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.more_vert, color: Colors.white, size: 18),
+                            ),
+                            color: const Color(0xFF222631),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            onSelected: (val) {
+                              if (val == 'edit') {
+                                EditBookDialog.show(
+                                  context,
+                                  book: book,
+                                  onSaved: _loadData,
+                                );
+                              } else if (val == 'compress') {
+                                CompressDialog.show(
+                                  context,
+                                  book: book,
+                                  onCompressed: _loadData,
+                                );
+                              } else if (val == 'restart') {
+                                _openManga(book.filePath, initialPage: 0);
+                              } else if (val == 'delete') {
+                                _deleteRecent(book);
+                              }
+                            },
+                            itemBuilder: (ctx) => [
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.edit_outlined, size: 18, color: Colors.white70),
+                                    SizedBox(width: 10),
+                                    Text('Переименовать и теги', style: TextStyle(color: Colors.white)),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'compress',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.speed_rounded, size: 18, color: Colors.amber),
+                                    SizedBox(width: 10),
+                                    Text('Сжать архив (WebP)', style: TextStyle(color: Colors.amber)),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'restart',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.replay, size: 18, color: Colors.white70),
+                                    SizedBox(width: 10),
+                                    Text('С начала', style: TextStyle(color: Colors.white)),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                                    SizedBox(width: 10),
+                                    Text('Удалить из списка', style: TextStyle(color: Colors.redAccent)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 14),
 
-                // Название и прогресс
-                Expanded(
+                // 2. ИНФОРМАЦИЯ О МАНГЕ (Название, теги, страница, размер)
+                Padding(
+                  padding: const EdgeInsets.all(10),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -516,19 +811,48 @@ class _HomeScreenState extends State<HomeScreen> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 15,
+                          fontSize: 14,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
+                      const SizedBox(height: 4),
+
+                      // Теги (если есть)
+                      if (book.tags.isNotEmpty)
+                        SizedBox(
+                          height: 20,
+                          child: ListView(
+                            scrollDirection: Axis.horizontal,
+                            children: book.tags.map((tag) {
+                              return Container(
+                                margin: const EdgeInsets.only(right: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: primary.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  '#$tag',
+                                  style: TextStyle(
+                                    color: primary,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
                       const SizedBox(height: 6),
-                      // Полоса прогресса
+
+                      // Полоса прогресса чтения
                       ClipRRect(
                         borderRadius: BorderRadius.circular(4),
                         child: LinearProgressIndicator(
                           value: progressFraction,
                           backgroundColor: Colors.white12,
                           color: primary,
-                          minHeight: 5,
+                          minHeight: 4,
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -536,62 +860,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            'Стр. ${book.lastPage + 1} из ${book.totalPages}${book.fileSize > 0 ? " • ${_formatFileSize(book.fileSize)}" : ""}',
+                            'Стр. ${book.lastPage + 1}/${book.totalPages}',
                             style: TextStyle(
-                              color: Colors.white.withOpacity(0.6),
-                              fontSize: 12,
+                              color: Colors.white.withValues(alpha: 0.6),
+                              fontSize: 11,
                             ),
                           ),
                           Text(
-                            _formatDate(book.lastReadTime),
+                            _formatFileSize(book.fileSize),
                             style: TextStyle(
-                              color: Colors.white.withOpacity(0.4),
-                              fontSize: 11,
+                              color: Colors.white.withValues(alpha: 0.45),
+                              fontSize: 10,
                             ),
                           ),
                         ],
                       ),
                     ],
                   ),
-                ),
-
-                // Меню действий
-                PopupMenuButton<String>(
-                  icon: Icon(
-                    Icons.more_vert,
-                    color: Colors.white.withOpacity(0.4),
-                    size: 20,
-                  ),
-                  color: const Color(0xFF22262F),
-                  onSelected: (val) {
-                    if (val == 'delete') {
-                      _deleteRecent(book);
-                    } else if (val == 'restart') {
-                      _openManga(book.filePath, initialPage: 0);
-                    }
-                  },
-                  itemBuilder: (ctx) => [
-                    const PopupMenuItem(
-                      value: 'restart',
-                      child: Row(
-                        children: [
-                          Icon(Icons.replay, size: 18, color: Colors.white70),
-                          SizedBox(width: 8),
-                          Text('С начала', style: TextStyle(color: Colors.white)),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'delete',
-                      child: Row(
-                        children: [
-                          Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
-                          SizedBox(width: 8),
-                          Text('Удалить из списка', style: TextStyle(color: Colors.redAccent)),
-                        ],
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
@@ -600,13 +885,17 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-}
 
-class BoxModShadow extends BoxShadow {
-  const BoxModShadow({
-    super.color = const Color(0xFF000000),
-    super.offset = Offset.zero,
-    super.blurRadius = 0.0,
-    super.spreadRadius = 0.0,
-  });
+  Widget _buildFallbackCover(Color primary) {
+    return Container(
+      color: const Color(0xFF1B1E26),
+      child: Center(
+        child: Icon(
+          Icons.menu_book_rounded,
+          size: 48,
+          color: primary.withValues(alpha: 0.3),
+        ),
+      ),
+    );
+  }
 }

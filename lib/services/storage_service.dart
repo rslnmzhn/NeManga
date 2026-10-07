@@ -56,12 +56,20 @@ class StorageService {
     required int currentPage,
     required int totalPages,
     int? fileSize,
+    String? coverPath,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final currentList = await getRecentBooks();
 
-    final title = p.basenameWithoutExtension(filePath);
-    final size = fileSize ?? (File(filePath).existsSync() ? File(filePath).lengthSync() : 0);
+    // Находим существующую запись, чтобы сохранить кастомный заголовок и теги
+    final existingIndex = currentList.indexWhere((b) => b.filePath == filePath);
+    final existing = existingIndex != -1 ? currentList[existingIndex] : null;
+
+    final title = existing?.title ?? p.basenameWithoutExtension(filePath);
+    final size = fileSize ?? (File(filePath).existsSync() ? File(filePath).lengthSync() : (existing?.fileSize ?? 0));
+    final cover = coverPath ?? existing?.coverPath;
+    final tags = existing?.tags ?? const [];
+    final isOptimized = existing?.isOptimized ?? false;
 
     // Удаляем старую запись если была
     currentList.removeWhere((b) => b.filePath == filePath);
@@ -74,13 +82,43 @@ class StorageService {
       lastPage: currentPage,
       lastReadTime: DateTime.now(),
       fileSize: size,
+      coverPath: cover,
+      tags: tags,
+      isOptimized: isOptimized,
     );
 
     currentList.insert(0, newBook);
 
-    // Ограничиваем историю, например, 30 книгами
-    final trimmed = currentList.take(30).map((b) => b.toJson()).toList();
+    // Ограничиваем историю, например, 50 книгами
+    final trimmed = currentList.take(50).map((b) => b.toJson()).toList();
     await prefs.setStringList(_keyRecentBooks, trimmed);
+  }
+
+  /// Обновить метаданные книги (название, теги, обложку)
+  static Future<void> updateBook(BookMetadata updated) async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentList = await getRecentBooks();
+
+    final idx = currentList.indexWhere((b) => b.filePath == updated.filePath);
+    if (idx != -1) {
+      currentList[idx] = updated;
+    } else {
+      currentList.insert(0, updated);
+    }
+
+    final trimmed = currentList.take(50).map((b) => b.toJson()).toList();
+    await prefs.setStringList(_keyRecentBooks, trimmed);
+  }
+
+  /// Получить все используемые уникальные теги
+  static Future<List<String>> getAllTags() async {
+    final books = await getRecentBooks();
+    final tagsSet = <String>{};
+    for (final book in books) {
+      tagsSet.addAll(book.tags);
+    }
+    final sorted = tagsSet.toList()..sort();
+    return sorted;
   }
 
   /// Удалить книгу из истории

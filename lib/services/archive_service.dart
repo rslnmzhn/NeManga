@@ -79,6 +79,59 @@ class ArchiveService {
     return md5.convert(utf8.encode(input)).toString();
   }
 
+  /// Получить путь к постоянному файлу обложки книги
+  static Future<String> getCoverFilePath(String archivePath, int fileSizeBytes) async {
+    final hash = getArchiveHash(archivePath, fileSizeBytes);
+    final docsDir = await getApplicationDocumentsDirectory();
+    final coversDir = Directory(p.join(docsDir.path, 'covers'));
+    if (!await coversDir.exists()) {
+      await coversDir.create(recursive: true);
+    }
+    return p.join(coversDir.path, '$hash.jpg');
+  }
+
+  /// Быстро извлечь только первую страницу в качестве обложки
+  static Future<String?> extractCoverOnly(String archivePath) async {
+    final file = File(archivePath);
+    if (!await file.exists()) return null;
+
+    final fileSize = await file.length();
+    final persistentCoverPath = await getCoverFilePath(archivePath, fileSize);
+    if (await File(persistentCoverPath).exists()) {
+      return persistentCoverPath;
+    }
+
+    try {
+      final extractedCover = await compute(_extractCoverIsolate, {
+        'archivePath': archivePath,
+        'destCoverPath': persistentCoverPath,
+      });
+      return extractedCover;
+    } catch (e) {
+      debugPrint('Ошибка извлечения обложки: $e');
+      return null;
+    }
+  }
+
+  static String? _extractCoverIsolate(Map<String, dynamic> args) {
+    final archivePath = args['archivePath'] as String;
+    final destCoverPath = args['destCoverPath'] as String;
+
+    final inputStream = InputFileStream(archivePath);
+    final archive = ZipDecoder().decodeStream(inputStream);
+
+    final imageEntries = archive.where((f) => f.isFile && isImageFile(f.name)).toList();
+    if (imageEntries.isEmpty) return null;
+
+    imageEntries.sort((a, b) => naturalCompare(a.name, b.name));
+    final firstEntry = imageEntries.first;
+
+    final outFile = File(destCoverPath);
+    final content = firstEntry.content as List<int>;
+    outFile.writeAsBytesSync(content, flush: true);
+    return destCoverPath;
+  }
+
   /// Распаковать и подготовить страницы манги
   static Future<MangaArchiveInfo> loadManga(
     String archivePath, {
@@ -95,6 +148,7 @@ class ArchiveService {
     final mangaCacheDir = Directory(p.join(tempDir.path, 'nemanga_cache', hash));
 
     final title = p.basenameWithoutExtension(archivePath);
+    final persistentCoverPath = await getCoverFilePath(archivePath, fileSize);
 
     // Если уже было распаковано ранее, проверяем кэш
     if (await mangaCacheDir.exists()) {
@@ -106,11 +160,18 @@ class ArchiveService {
 
       if (cachedFiles.isNotEmpty) {
         cachedFiles.sort((a, b) => naturalCompare(p.basename(a), p.basename(b)));
+        // Если обложки еще нет в персистентном хранилище, копируем
+        if (!await File(persistentCoverPath).exists() && cachedFiles.isNotEmpty) {
+          try {
+            await File(cachedFiles.first).copy(persistentCoverPath);
+          } catch (_) {}
+        }
+
         return MangaArchiveInfo(
           archivePath: archivePath,
           title: title,
           pagePaths: cachedFiles,
-          coverPath: cachedFiles.first,
+          coverPath: (await File(persistentCoverPath).exists()) ? persistentCoverPath : cachedFiles.first,
         );
       }
     }
@@ -128,11 +189,16 @@ class ArchiveService {
       throw Exception('В архиве не найдено поддерживаемых изображений манги (JPG, PNG, WEBP и др.)');
     }
 
+    // Сохраняем первую страницу как постоянную обложку
+    try {
+      await File(extractedPaths.first).copy(persistentCoverPath);
+    } catch (_) {}
+
     return MangaArchiveInfo(
       archivePath: archivePath,
       title: title,
       pagePaths: extractedPaths,
-      coverPath: extractedPaths.first,
+      coverPath: (await File(persistentCoverPath).exists()) ? persistentCoverPath : extractedPaths.first,
     );
   }
 
@@ -164,7 +230,6 @@ class ArchiveService {
       final outputPath = p.join(destDirPath, outputName);
 
       final outputFile = File(outputPath);
-      // Записываем байты изображения на диск
       final content = entry.content as List<int>;
       outputFile.writeAsBytesSync(content, flush: true);
       resultPaths.add(outputPath);
@@ -173,7 +238,7 @@ class ArchiveService {
     return resultPaths;
   }
 
-  /// Очистка старого кэша
+  /// Очистка старого кэша страниц
   static Future<void> clearCache() async {
     try {
       final tempDir = await getTemporaryDirectory();
