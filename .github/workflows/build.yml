@@ -1,0 +1,242 @@
+name: Build NeManga Artifacts
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish release artifacts.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Analyze and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Flutter analyze
+        run: flutter analyze
+
+      - name: Flutter test
+        run: flutter test
+
+  resolve_release:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    needs: quality
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release == true && github.ref == 'refs/heads/main')
+    outputs:
+      release_version: ${{ steps.resolve.outputs.release_version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      android_version_code: ${{ steps.resolve.outputs.android_version_code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: resolve
+        shell: bash
+        run: bash .github/scripts/resolve_release_version.sh --github-output "${GITHUB_OUTPUT}"
+
+  build_android_ci:
+    name: Build Android APK (CI Validation)
+    runs-on: ubuntu-latest
+    needs:
+      - quality
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release != true)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build APK (debug, CI validation)
+        run: flutter build apk --debug
+
+  build_android_release:
+    name: Build Android APK (Release)
+    runs-on: ubuntu-latest
+    needs:
+      - quality
+      - resolve_release
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release == true && github.ref == 'refs/heads/main')
+    env:
+      RELEASE_VERSION: ${{ needs.resolve_release.outputs.release_version }}
+      RELEASE_VERSION_CODE: ${{ needs.resolve_release.outputs.android_version_code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Apply release version
+        shell: bash
+        run: |
+          bash .github/scripts/apply_release_version.sh \
+            --version "${RELEASE_VERSION}" \
+            --version-code "${RELEASE_VERSION_CODE}"
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Prepare Android release signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" && -n "${ANDROID_KEYSTORE_PASSWORD:-}" && -n "${ANDROID_KEY_ALIAS:-}" && -n "${ANDROID_KEY_PASSWORD:-}" ]]; then
+            echo "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > android/app/release-keystore.jks
+            cat > android/key.properties <<EOF
+          storeFile=release-keystore.jks
+          storePassword=${ANDROID_KEYSTORE_PASSWORD}
+          keyAlias=${ANDROID_KEY_ALIAS}
+          keyPassword=${ANDROID_KEY_PASSWORD}
+          EOF
+          else
+            echo "Signing secrets not configured, building standard APK."
+          fi
+
+      - name: Build APKs (split per ABI)
+        run: flutter build apk --release --split-per-abi
+
+      - name: Build Universal APK
+        run: flutter build apk --release
+
+      - name: Clean up temporary signing files
+        if: always()
+        shell: bash
+        run: rm -f android/app/release-keystore.jks android/key.properties
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-release
+          path: |
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-x86_64-release.apk
+            build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  publish_release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - build_android_release
+      - resolve_release
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release == true && github.ref == 'refs/heads/main')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk-release
+          path: release_assets
+
+      - name: Prepare release files and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.resolve_release.outputs.release_version }}"
+
+          cd release_assets
+          cp app-armeabi-v7a-release.apk "NeManga-v${VERSION}-android-armeabi-v7a.apk"
+          cp app-arm64-v8a-release.apk "NeManga-v${VERSION}-android-arm64-v8a.apk"
+          cp app-x86_64-release.apk "NeManga-v${VERSION}-android-x86_64.apk"
+          cp app-release.apk "NeManga-v${VERSION}-android-universal.apk"
+
+          rm -f app-*-release.apk app-release.apk
+
+          sha256sum NeManga-*.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        id: create_release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.resolve_release.outputs.release_tag }}
+          RELEASE_TITLE: "NeManga ${{ needs.resolve_release.outputs.release_tag }}"
+        run: |
+          set -euo pipefail
+          PRERELEASE_FLAG=""
+          if [[ "${TAG_NAME}" == *"-pre."* || "${TAG_NAME}" == *"-rc."* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          if ! gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release create "${TAG_NAME}" \
+              --title "${RELEASE_TITLE}" \
+              --notes "Automated release of ${RELEASE_TITLE} for Android" \
+              ${PRERELEASE_FLAG}
+          fi
+
+          gh release upload "${TAG_NAME}" release_assets/* --clobber
