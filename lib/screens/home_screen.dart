@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
 import '../services/storage_service.dart';
@@ -8,6 +9,7 @@ import '../services/update_service.dart';
 import '../widgets/compress_dialog.dart';
 import '../widgets/edit_book_dialog.dart';
 import '../widgets/update_dialog.dart';
+import 'manga_detail_screen.dart';
 import 'reader_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -18,9 +20,11 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  List<BookMetadata> _allBooks = [];
-  List<BookMetadata> _filteredBooks = [];
+  List<MangaGroup> _allGroups = [];
+  List<MangaGroup> _filteredGroups = [];
   List<String> _allTags = [];
+
+  ReadingStatus? _selectedStatus;
   String? _selectedTag;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
@@ -69,13 +73,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadData() async {
     final settings = await StorageService.loadSettings();
-    final recents = await StorageService.getRecentBooks();
+    final groups = await StorageService.getMangaGroups();
     final tags = await StorageService.getAllTags();
 
     if (mounted) {
       setState(() {
         _settings = settings;
-        _allBooks = recents;
+        _allGroups = groups;
         _allTags = tags;
         _applyFilter();
       });
@@ -83,44 +87,43 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _applyFilter() {
-    _filteredBooks = _allBooks.where((book) {
+    _filteredGroups = _allGroups.where((group) {
       final matchesSearch = _searchQuery.isEmpty ||
-          book.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          book.tags.any((t) => t.toLowerCase().contains(_searchQuery.toLowerCase()));
+          group.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          group.tags.any((t) => t.toLowerCase().contains(_searchQuery.toLowerCase()));
 
-      final matchesTag = _selectedTag == null || book.tags.contains(_selectedTag);
+      final matchesTag = _selectedTag == null || group.tags.contains(_selectedTag);
+      final matchesStatus = _selectedStatus == null || group.status == _selectedStatus;
 
-      return matchesSearch && matchesTag;
+      return matchesSearch && matchesTag && matchesStatus;
     }).toList();
   }
 
-  Future<void> _pickAndOpenArchive() async {
+  Future<void> _pickAndOpenArchives() async {
     try {
       final files = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['zip', 'cbz'],
-        dialogTitle: 'Выберите архив манги (.zip или .cbz)',
+        dialogTitle: 'Выберите архивы манги (.zip или .cbz)',
       );
 
-      if (files.isNotEmpty && files.first.path != null) {
-        final filePath = files.first.path!;
-        await _openManga(filePath);
+      if (files.isNotEmpty) {
+        await _processPickedArchives(files);
       }
     } catch (e) {
       try {
         final fallbackFiles = await FilePicker.pickFiles(
           type: FileType.any,
-          dialogTitle: 'Выберите архив манги (.zip или .cbz)',
+          dialogTitle: 'Выберите архивы манги (.zip или .cbz)',
         );
-        if (fallbackFiles.isNotEmpty && fallbackFiles.first.path != null) {
-          final filePath = fallbackFiles.first.path!;
-          await _openManga(filePath);
+        if (fallbackFiles.isNotEmpty) {
+          await _processPickedArchives(fallbackFiles);
         }
       } catch (fallbackError) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Ошибка выбора файла: $fallbackError'),
+              content: Text('Ошибка выбора файлов: $fallbackError'),
               backgroundColor: Colors.redAccent,
             ),
           );
@@ -129,42 +132,107 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _openManga(String filePath, {int initialPage = 0}) async {
+  Future<void> _processPickedArchives(List<PlatformFile> files) async {
+    final validPaths = files.map((f) => f.path).whereType<String>().toList();
+    if (validPaths.isEmpty) return;
+
     setState(() {
       _isLoading = true;
-      _loadingMessage = 'Подготовка страниц...';
+      _loadingMessage = 'Подготовка файлов...';
     });
 
     try {
-      final info = await ArchiveService.loadManga(filePath);
+      if (validPaths.length == 1) {
+        // Один архив: открываем сразу
+        final filePath = validPaths.first;
+        final info = await ArchiveService.loadManga(filePath);
 
-      // Сохраняем обложку в метаданные книги
-      await StorageService.saveBookProgress(
-        filePath: filePath,
-        currentPage: initialPage,
-        totalPages: info.pagePaths.length,
-        coverPath: info.coverPath,
-      );
+        final group = await StorageService.findOrCreateGroupForFile(
+          filePath: filePath,
+          title: info.title,
+          totalPages: info.pagePaths.length,
+          currentPage: 0,
+          coverPath: info.coverPath,
+        );
 
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-      });
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+        });
 
-      // Открываем читалку
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (ctx) => ReaderScreen(
-            title: info.title,
-            archivePath: info.archivePath,
-            pagePaths: info.pagePaths,
-            initialPage: initialPage,
-            settings: _settings,
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (ctx) => ReaderScreen(
+              title: info.title,
+              archivePath: filePath,
+              pagePaths: info.pagePaths,
+              initialPage: 0,
+              settings: _settings,
+              mangaGroup: group,
+              currentChapterIndex: 0,
+            ),
           ),
-        ),
-      );
+        );
+      } else {
+        // Несколько архивов: объединяем в одну группу манги
+        validPaths.sort(ArchiveService.naturalCompare);
+        final firstPath = validPaths.first;
+        final parentDirName = p.basename(p.dirname(firstPath));
+        final groupTitle = (parentDirName.isNotEmpty && parentDirName != '.' && parentDirName != '/')
+            ? parentDirName
+            : p.basenameWithoutExtension(firstPath);
 
-      // При возвращении на главный экран обновляем библиотеку
+        final chapters = <ChapterItem>[];
+        String? groupCover;
+
+        for (int i = 0; i < validPaths.length; i++) {
+          final path = validPaths[i];
+          final title = p.basenameWithoutExtension(path);
+          final size = File(path).existsSync() ? File(path).lengthSync() : 0;
+
+          if (i == 0) {
+            groupCover = await ArchiveService.extractCoverOnly(path);
+          }
+
+          chapters.add(ChapterItem(
+            id: path,
+            filePath: path,
+            title: title,
+            totalPages: 0,
+            lastPage: 0,
+            lastReadTime: DateTime.now(),
+            fileSize: size,
+          ));
+        }
+
+        final newGroup = MangaGroup(
+          id: 'group_${DateTime.now().millisecondsSinceEpoch}',
+          title: groupTitle,
+          coverPath: groupCover,
+          status: ReadingStatus.reading,
+          chapters: chapters,
+          currentChapterIndex: 0,
+          updatedAt: DateTime.now(),
+        );
+
+        await StorageService.saveMangaGroup(newGroup);
+
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+        });
+
+        // Открываем детальный экран созданной группы
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (ctx) => MangaDetailScreen(
+              manga: newGroup,
+              settings: _settings,
+            ),
+          ),
+        );
+      }
+
       await _loadData();
     } catch (e) {
       if (mounted) {
@@ -174,7 +242,7 @@ class _HomeScreenState extends State<HomeScreen> {
         showDialog(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Ошибка открытия архива'),
+            title: const Text('Ошибка открытия'),
             content: Text(e.toString()),
             actions: [
               TextButton(
@@ -188,8 +256,77 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _deleteRecent(BookMetadata book) async {
-    await StorageService.removeBook(book.filePath);
+  Future<void> _openReaderDirect(MangaGroup group) async {
+    final chapter = group.currentChapter;
+    if (chapter == null) {
+      _openMangaDetail(group);
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = 'Загрузка главы...';
+    });
+
+    try {
+      final info = await ArchiveService.loadManga(chapter.filePath);
+
+      await StorageService.findOrCreateGroupForFile(
+        filePath: chapter.filePath,
+        title: chapter.title,
+        totalPages: info.pagePaths.length,
+        currentPage: chapter.lastPage,
+        coverPath: group.coverPath ?? info.coverPath,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (ctx) => ReaderScreen(
+            title: group.chapters.length > 1 ? '${group.title} — ${chapter.title}' : group.title,
+            archivePath: chapter.filePath,
+            pagePaths: info.pagePaths,
+            initialPage: chapter.lastPage,
+            settings: _settings,
+            mangaGroup: group,
+            currentChapterIndex: group.currentChapterIndex,
+          ),
+        ),
+      );
+
+      await _loadData();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Ошибка открытия'),
+            content: Text(e.toString()),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Понятно')),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  void _openMangaDetail(MangaGroup group) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (ctx) => MangaDetailScreen(
+          manga: group,
+          settings: _settings,
+        ),
+      ),
+    );
     await _loadData();
   }
 
@@ -199,7 +336,7 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Очистить кэш страниц?'),
         content: const Text(
-          'Это освободит память устройства от извлеченных страниц. Ваши архивы и сохраненный прогресс останутся на месте.',
+          'Это освободит память устройства от извлеченных страниц. Ваши архивы, обложки и сохраненный прогресс останутся на месте.',
         ),
         actions: [
           TextButton(
@@ -219,7 +356,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await ArchiveService.clearCache();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Кэш успешно очищен')),
+          const SnackBar(content: Text('Кэш страниц успешно очищен')),
         );
       }
     }
@@ -235,6 +372,19 @@ class _HomeScreenState extends State<HomeScreen> {
       i++;
     }
     return '${size.toStringAsFixed(1)} ${suffixes[i]}';
+  }
+
+  Color _getStatusColor(ReadingStatus status, Color primary) {
+    switch (status) {
+      case ReadingStatus.reading:
+        return primary;
+      case ReadingStatus.planned:
+        return Colors.amber;
+      case ReadingStatus.completed:
+        return Colors.greenAccent;
+      case ReadingStatus.none:
+        return Colors.grey;
+    }
   }
 
   @override
@@ -293,16 +443,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Карточка выбора нового архива
+                        // Карточка добавления манги
                         _buildOpenArchiveCard(primary),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 14),
 
-                        // Поиск и фильтры по тегам
-                        if (_allBooks.isNotEmpty) ...[
+                        // Поиск
+                        if (_allGroups.isNotEmpty) ...[
                           _buildSearchBar(),
                           const SizedBox(height: 12),
-                          _buildTagsFilterRow(primary),
-                          const SizedBox(height: 16),
+
+                          // Вкладки статусов: Все, Читаю, В планах, Прочитано
+                          _buildStatusTabs(primary),
+                          const SizedBox(height: 10),
+
+                          // Фильтры по тегам
+                          if (_allTags.isNotEmpty) ...[
+                            _buildTagsFilterRow(primary),
+                            const SizedBox(height: 12),
+                          ],
                         ],
 
                         // Заголовок библиотеки
@@ -310,28 +468,30 @@ class _HomeScreenState extends State<HomeScreen> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(
-                              _selectedTag != null ? 'Тег: #$_selectedTag' : 'Библиотека манги',
+                              _selectedStatus != null
+                                  ? _selectedStatus!.label
+                                  : (_selectedTag != null ? 'Тег: #$_selectedTag' : 'Библиотека манги'),
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white,
                               ),
                             ),
-                            if (_filteredBooks.isNotEmpty)
+                            if (_filteredGroups.isNotEmpty)
                               Text(
-                                '${_filteredBooks.length} шт.',
+                                '${_filteredGroups.length} шт.',
                                 style: const TextStyle(fontSize: 14, color: Colors.grey),
                               ),
                           ],
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 10),
                       ],
                     ),
                   ),
                 ),
 
-                // Сетка с большими превьюшками манги
-                if (_filteredBooks.isEmpty)
+                // Сетка с большими обложками
+                if (_filteredGroups.isEmpty)
                   SliverToBoxAdapter(child: _buildEmptyState())
                 else
                   SliverPadding(
@@ -339,16 +499,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     sliver: SliverGrid(
                       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: 2,
-                        childAspectRatio: 0.56,
+                        childAspectRatio: 0.54,
                         crossAxisSpacing: 14,
                         mainAxisSpacing: 14,
                       ),
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
-                          final book = _filteredBooks[index];
-                          return _buildLargeMangaCard(book, primary);
+                          final group = _filteredGroups[index];
+                          return _buildMangaGroupCard(group, primary);
                         },
-                        childCount: _filteredBooks.length,
+                        childCount: _filteredGroups.length,
                       ),
                     ),
                   ),
@@ -392,6 +552,50 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildStatusTabs(Color primary) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          _buildStatusFilterChip(null, 'Все', Icons.apps_rounded, primary),
+          const SizedBox(width: 8),
+          _buildStatusFilterChip(ReadingStatus.reading, 'Читаю', Icons.auto_stories_rounded, primary),
+          const SizedBox(width: 8),
+          _buildStatusFilterChip(ReadingStatus.planned, 'В планах', Icons.bookmark_border_rounded, Colors.amber),
+          const SizedBox(width: 8),
+          _buildStatusFilterChip(ReadingStatus.completed, 'Прочитано', Icons.check_circle_outline_rounded, Colors.greenAccent),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusFilterChip(ReadingStatus? status, String label, IconData icon, Color activeColor) {
+    final isSelected = _selectedStatus == status;
+    return ChoiceChip(
+      avatar: Icon(icon, size: 16, color: isSelected ? Colors.white : Colors.grey),
+      label: Text(label),
+      selected: isSelected,
+      selectedColor: activeColor.withValues(alpha: 0.25),
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.white : Colors.white70,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 13,
+      ),
+      side: BorderSide(
+        color: isSelected ? activeColor : Colors.white12,
+        width: isSelected ? 1.5 : 1,
+      ),
+      onSelected: (selected) {
+        if (selected) {
+          setState(() {
+            _selectedStatus = status;
+            _applyFilter();
+          });
+        }
+      },
+    );
+  }
+
   Widget _buildSearchBar() {
     return TextField(
       controller: _searchController,
@@ -402,7 +606,7 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       },
       decoration: InputDecoration(
-        hintText: 'Поиск манги или тега...',
+        hintText: 'Поиск по названию или тегам...',
         prefixIcon: const Icon(Icons.search, color: Colors.grey, size: 20),
         suffixIcon: _searchQuery.isNotEmpty
             ? IconButton(
@@ -432,15 +636,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildTagsFilterRow(Color primary) {
-    if (_allTags.isEmpty) return const SizedBox.shrink();
-
     return SizedBox(
-      height: 36,
+      height: 32,
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
           ChoiceChip(
-            label: const Text('Все'),
+            label: const Text('Все теги'),
             selected: _selectedTag == null,
             onSelected: (selected) {
               if (selected) {
@@ -498,7 +700,7 @@ class _HomeScreenState extends State<HomeScreen> {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(20),
-          onTap: _pickAndOpenArchive,
+          onTap: _pickAndOpenArchives,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
             child: Row(
@@ -528,7 +730,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Открыть архив манги',
+                        'Открыть архив(ы) манги',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 16,
@@ -537,7 +739,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        'Поддерживаются .zip и .cbz архивы',
+                        'Поддерживается выбор нескольких глав сразу',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.7),
                           fontSize: 12,
@@ -586,9 +788,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            _searchQuery.isNotEmpty || _selectedTag != null
+            _searchQuery.isNotEmpty || _selectedTag != null || _selectedStatus != null
                 ? 'По вашему запросу ничего не найдено.'
-                : 'Нажмите кнопку выше, чтобы открыть первый zip/cbz архив.',
+                : 'Нажмите кнопку выше, чтобы открыть первый zip/cbz архив с главами.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 13,
@@ -600,13 +802,10 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildLargeMangaCard(BookMetadata book, Color primary) {
-    final progressFraction = book.totalPages > 0
-        ? ((book.lastPage + 1) / book.totalPages).clamp(0.0, 1.0)
-        : 0.0;
-    final percent = (progressFraction * 100).toInt();
-
-    final hasCover = book.coverPath != null && File(book.coverPath!).existsSync();
+  Widget _buildMangaGroupCard(MangaGroup group, Color primary) {
+    final percent = group.overallProgressPercent;
+    final hasCover = group.coverPath != null && File(group.coverPath!).existsSync();
+    final statusColor = _getStatusColor(group.status, primary);
 
     return Container(
       decoration: BoxDecoration(
@@ -626,37 +825,37 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: () => _openManga(book.filePath, initialPage: book.lastPage),
+            onTap: () => _openMangaDetail(group),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 1. БОЛЬШАЯ ПРЕВЬЮШКА (Обложка первой страницы)
+                // 1. БОЛЬШАЯ ПРЕВЬЮШКА
                 Expanded(
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
                       if (hasCover)
                         Image.file(
-                          File(book.coverPath!),
+                          File(group.coverPath!),
                           fit: BoxFit.cover,
                           errorBuilder: (context, error, stackTrace) => _buildFallbackCover(primary),
                         )
                       else
                         _buildFallbackCover(primary),
 
-                      // Градиентное затемнение снизу для читаемости
+                      // Градиент снизу
                       Positioned(
                         left: 0,
                         right: 0,
                         bottom: 0,
-                        height: 60,
+                        height: 70,
                         child: Container(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.bottomCenter,
                               end: Alignment.topCenter,
                               colors: [
-                                Colors.black.withValues(alpha: 0.8),
+                                Colors.black.withValues(alpha: 0.85),
                                 Colors.transparent,
                               ],
                             ),
@@ -664,48 +863,78 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
 
-                      // Процент прочтения
+                      // Бейдж статуса слева сверху
                       Positioned(
                         top: 8,
                         left: 8,
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.8),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: statusColor.withValues(alpha: 0.6)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.bookmark_rounded, size: 12, color: statusColor),
+                              const SizedBox(width: 4),
+                              Text(
+                                group.status.label,
+                                style: TextStyle(
+                                  color: statusColor,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // Число глав справа сверху
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
                             color: Colors.black.withValues(alpha: 0.75),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: primary.withValues(alpha: 0.5)),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
-                            '$percent%',
-                            style: TextStyle(
-                              color: primary,
-                              fontSize: 11,
+                            '${group.chapters.length} гл.',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
                       ),
 
-                      // Бейдж сжатия (если оптимизирован)
-                      if (book.isOptimized)
-                        Positioned(
-                          top: 8,
-                          right: 8,
+                      // Кнопка быстрого чтения по центру снизу
+                      Positioned(
+                        bottom: 6,
+                        left: 8,
+                        child: InkWell(
+                          onTap: () => _openReaderDirect(group),
+                          borderRadius: BorderRadius.circular(20),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.greenAccent.withValues(alpha: 0.9),
-                              borderRadius: BorderRadius.circular(8),
+                              color: primary,
+                              borderRadius: BorderRadius.circular(16),
                             ),
                             child: const Row(
                               children: [
-                                Icon(Icons.bolt, color: Colors.black, size: 12),
-                                SizedBox(width: 2),
+                                Icon(Icons.play_arrow_rounded, color: Colors.white, size: 14),
+                                SizedBox(width: 3),
                                 Text(
-                                  'WebP',
+                                  'Читать',
                                   style: TextStyle(
-                                    color: Colors.black,
-                                    fontSize: 10,
+                                    color: Colors.white,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -713,100 +942,119 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         ),
+                      ),
 
-                      // Кнопка контекстного меню
+                      // Контекстное меню
                       Positioned(
                         bottom: 4,
                         right: 4,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: PopupMenuButton<String>(
-                            icon: Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.6),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.more_vert, color: Colors.white, size: 18),
+                        child: PopupMenuButton<String>(
+                          icon: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.6),
+                              shape: BoxShape.circle,
                             ),
-                            color: const Color(0xFF222631),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                            onSelected: (val) {
-                              if (val == 'edit') {
-                                EditBookDialog.show(
-                                  context,
-                                  book: book,
-                                  onSaved: _loadData,
-                                );
-                              } else if (val == 'compress') {
+                            child: const Icon(Icons.more_vert, color: Colors.white, size: 18),
+                          ),
+                          color: const Color(0xFF222631),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          onSelected: (val) {
+                            if (val == 'open') {
+                              _openMangaDetail(group);
+                            } else if (val == 'edit') {
+                              EditBookDialog.show(
+                                context,
+                                book: BookMetadata(
+                                  filePath: group.id,
+                                  title: group.title,
+                                  totalPages: group.totalPages,
+                                  lastPage: 0,
+                                  lastReadTime: group.updatedAt,
+                                  fileSize: group.totalSize,
+                                  tags: group.tags,
+                                  coverPath: group.coverPath,
+                                  status: group.status,
+                                ),
+                                onSaved: _loadData,
+                              );
+                            } else if (val == 'compress') {
+                              if (group.chapters.isNotEmpty) {
+                                final ch = group.chapters.first;
                                 CompressDialog.show(
                                   context,
-                                  book: book,
+                                  book: BookMetadata(
+                                    filePath: ch.filePath,
+                                    title: '${group.title} (${ch.title})',
+                                    totalPages: ch.totalPages,
+                                    lastPage: ch.lastPage,
+                                    lastReadTime: ch.lastReadTime,
+                                    fileSize: ch.fileSize,
+                                    isOptimized: ch.isOptimized,
+                                  ),
                                   onCompressed: _loadData,
                                 );
-                              } else if (val == 'restart') {
-                                _openManga(book.filePath, initialPage: 0);
-                              } else if (val == 'delete') {
-                                _deleteRecent(book);
                               }
-                            },
-                            itemBuilder: (ctx) => [
-                              const PopupMenuItem(
-                                value: 'edit',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.edit_outlined, size: 18, color: Colors.white70),
-                                    SizedBox(width: 10),
-                                    Text('Переименовать и теги', style: TextStyle(color: Colors.white)),
-                                  ],
-                                ),
+                            } else if (val == 'delete') {
+                              StorageService.removeMangaGroup(group.id).then((_) => _loadData());
+                            }
+                          },
+                          itemBuilder: (ctx) => [
+                            const PopupMenuItem(
+                              value: 'open',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.menu_book, size: 18, color: Colors.white70),
+                                  SizedBox(width: 10),
+                                  Text('Открыть тайтл', style: TextStyle(color: Colors.white)),
+                                ],
                               ),
-                              const PopupMenuItem(
-                                value: 'compress',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.speed_rounded, size: 18, color: Colors.amber),
-                                    SizedBox(width: 10),
-                                    Text('Сжать архив (WebP)', style: TextStyle(color: Colors.amber)),
-                                  ],
-                                ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.edit_outlined, size: 18, color: Colors.white70),
+                                  SizedBox(width: 10),
+                                  Text('Переименовать / статус / теги', style: TextStyle(color: Colors.white)),
+                                ],
                               ),
-                              const PopupMenuItem(
-                                value: 'restart',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.replay, size: 18, color: Colors.white70),
-                                    SizedBox(width: 10),
-                                    Text('С начала', style: TextStyle(color: Colors.white)),
-                                  ],
-                                ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'compress',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.speed_rounded, size: 18, color: Colors.amber),
+                                  SizedBox(width: 10),
+                                  Text('Сжать архив (WebP)', style: TextStyle(color: Colors.amber)),
+                                ],
                               ),
-                              const PopupMenuItem(
-                                value: 'delete',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
-                                    SizedBox(width: 10),
-                                    Text('Удалить из списка', style: TextStyle(color: Colors.redAccent)),
-                                  ],
-                                ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                                  SizedBox(width: 10),
+                                  Text('Удалить из библиотеки', style: TextStyle(color: Colors.redAccent)),
+                                ],
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
 
-                // 2. ИНФОРМАЦИЯ О МАНГЕ (Название, теги, страница, размер)
+                // 2. ИНФОРМАЦИЯ О ТАЙТЛЕ
                 Padding(
                   padding: const EdgeInsets.all(10),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        book.title,
+                        group.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -817,25 +1065,25 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 4),
 
-                      // Теги (если есть)
-                      if (book.tags.isNotEmpty)
+                      // Теги
+                      if (group.tags.isNotEmpty)
                         SizedBox(
-                          height: 20,
+                          height: 18,
                           child: ListView(
                             scrollDirection: Axis.horizontal,
-                            children: book.tags.map((tag) {
+                            children: group.tags.map((tag) {
                               return Container(
                                 margin: const EdgeInsets.only(right: 4),
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                                 decoration: BoxDecoration(
                                   color: primary.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(6),
+                                  borderRadius: BorderRadius.circular(5),
                                 ),
                                 child: Text(
                                   '#$tag',
                                   style: TextStyle(
                                     color: primary,
-                                    fontSize: 10,
+                                    fontSize: 9,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
@@ -845,29 +1093,31 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       const SizedBox(height: 6),
 
-                      // Полоса прогресса чтения
+                      // Прогресс
                       ClipRRect(
                         borderRadius: BorderRadius.circular(4),
                         child: LinearProgressIndicator(
-                          value: progressFraction,
+                          value: group.overallProgressFraction,
                           backgroundColor: Colors.white12,
-                          color: primary,
+                          color: statusColor,
                           minHeight: 4,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 5),
+
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            'Стр. ${book.lastPage + 1}/${book.totalPages}',
+                            group.isCompleted ? 'Прочитано' : '$percent%',
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.6),
+                              color: statusColor,
                               fontSize: 11,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                           Text(
-                            _formatFileSize(book.fileSize),
+                            _formatFileSize(group.totalSize),
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.45),
                               fontSize: 10,

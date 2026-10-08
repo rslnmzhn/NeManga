@@ -31,6 +31,7 @@ class _EditBookDialogState extends State<EditBookDialog> {
   late TextEditingController _titleController;
   final TextEditingController _tagInputController = TextEditingController();
   late List<String> _tags;
+  late ReadingStatus _status;
 
   static const List<String> _suggestedTags = [
     'Любимое',
@@ -50,6 +51,7 @@ class _EditBookDialogState extends State<EditBookDialog> {
     super.initState();
     _titleController = TextEditingController(text: widget.book.title);
     _tags = List.from(widget.book.tags);
+    _status = widget.book.status;
   }
 
   @override
@@ -80,6 +82,7 @@ class _EditBookDialogState extends State<EditBookDialog> {
     final updated = widget.book.copyWith(
       title: newTitle.isNotEmpty ? newTitle : widget.book.title,
       tags: _tags,
+      status: _status,
     );
     await StorageService.updateBook(updated);
     widget.onSaved();
@@ -124,7 +127,25 @@ class _EditBookDialogState extends State<EditBookDialog> {
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
+
+            // Статус чтения
+            const Text(
+              'Статус прочтения',
+              style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                _buildStatusChip(ReadingStatus.reading, 'Читаю', primary),
+                _buildStatusChip(ReadingStatus.planned, 'В планах', Colors.amber),
+                _buildStatusChip(ReadingStatus.completed, 'Прочитано', Colors.greenAccent),
+                _buildStatusChip(ReadingStatus.none, 'Без статуса', Colors.grey),
+              ],
+            ),
+            const SizedBox(height: 16),
 
             // Теги
             const Text(
@@ -221,6 +242,31 @@ class _EditBookDialogState extends State<EditBookDialog> {
           child: const Text('Сохранить'),
         ),
       ],
+    );
+  }
+
+  Widget _buildStatusChip(ReadingStatus status, String label, Color color) {
+    final isSelected = _status == status;
+    return ChoiceChip(
+      selected: isSelected,
+      label: Text(label),
+      selectedColor: color.withValues(alpha: 0.25),
+      labelStyle: TextStyle(
+        color: isSelected ? color : Colors.white70,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 12,
+      ),
+      side: BorderSide(
+        color: isSelected ? color : Colors.white12,
+        width: isSelected ? 1.5 : 1,
+      ),
+      onSelected: (val) {
+        if (val) {
+          setState(() {
+            _status = status;
+          });
+        }
+      },
     );
   }
 }

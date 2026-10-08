@@ -5,6 +5,6 @@ void main() {
   testWidgets('App smoke test', (WidgetTester tester) async {
     await tester.pumpWidget(const NeMangaApp());
     expect(find.text('NeManga'), findsOneWidget);
-    expect(find.text('Открыть архив манги'), findsOneWidget);
+    expect(find.text('Открыть архив(ы) манги'), findsOneWidget);
   });
 }

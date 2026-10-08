@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/reader_models.dart';
+import '../services/archive_service.dart';
 import '../services/storage_service.dart';
 import '../widgets/reader_settings_sheet.dart';
 
@@ -12,6 +13,8 @@ class ReaderScreen extends StatefulWidget {
   final List<String> pagePaths;
   final int initialPage;
   final ReaderSettings settings;
+  final MangaGroup? mangaGroup;
+  final int currentChapterIndex;
 
   const ReaderScreen({
     super.key,
@@ -20,6 +23,8 @@ class ReaderScreen extends StatefulWidget {
     required this.pagePaths,
     this.initialPage = 0,
     required this.settings,
+    this.mangaGroup,
+    this.currentChapterIndex = 0,
   });
 
   @override
@@ -194,6 +199,49 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _pageController.previousPage(
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
+        );
+      }
+    }
+  }
+
+  Future<void> _switchChapter(int targetIndex) async {
+    final group = widget.mangaGroup;
+    if (group == null || targetIndex < 0 || targetIndex >= group.chapters.length) return;
+
+    await _saveCurrentProgress();
+
+    final targetChapter = group.chapters[targetIndex];
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final info = await ArchiveService.loadManga(targetChapter.filePath);
+      if (!mounted) return;
+      Navigator.of(context).pop(); // dismiss loading
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (ctx) => ReaderScreen(
+            title: '${group.title} — ${targetChapter.title}',
+            archivePath: targetChapter.filePath,
+            pagePaths: info.pagePaths,
+            initialPage: targetChapter.lastPage,
+            settings: _settings,
+            mangaGroup: group,
+            currentChapterIndex: targetIndex,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка открытия главы: $e')),
         );
       }
     }
@@ -629,6 +677,32 @@ class _ReaderScreenState extends State<ReaderScreen> {
               ),
             ],
           ),
+          if (widget.mangaGroup != null && widget.mangaGroup!.chapters.length > 1) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                TextButton.icon(
+                  onPressed: widget.currentChapterIndex > 0
+                      ? () => _switchChapter(widget.currentChapterIndex - 1)
+                      : null,
+                  icon: const Icon(Icons.arrow_back_ios_new, size: 14),
+                  label: const Text('Пред. глава'),
+                ),
+                Text(
+                  'Глава ${widget.currentChapterIndex + 1} из ${widget.mangaGroup!.chapters.length}',
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+                TextButton.icon(
+                  onPressed: widget.currentChapterIndex < widget.mangaGroup!.chapters.length - 1
+                      ? () => _switchChapter(widget.currentChapterIndex + 1)
+                      : null,
+                  icon: const Icon(Icons.arrow_forward_ios, size: 14),
+                  label: const Text('След. глава'),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
