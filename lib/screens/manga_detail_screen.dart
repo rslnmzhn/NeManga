@@ -241,7 +241,8 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
           sourcePath: c.filePath,
           maxWidth: 1440,
           quality: 80,
-          replaceOriginal: true,
+          saveToPublicFolder: true,
+          deleteOriginal: true,
         );
         totalSaved += (res.originalSize - res.compressedSize);
         count++;

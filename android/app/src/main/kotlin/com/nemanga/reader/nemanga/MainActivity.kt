@@ -4,8 +4,10 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
@@ -103,6 +105,20 @@ class MainActivity : FlutterActivity() {
         // Канал нативного сжатия архивов манги
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, COMPRESSOR_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
+                "getPublicMangaDirectory" -> {
+                    val publicDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "NeManga")
+                    if (!publicDir.exists()) {
+                        publicDir.mkdirs()
+                    }
+                    result.success(publicDir.absolutePath)
+                }
+                "scanMediaFile" -> {
+                    val path = call.argument<String>("path")
+                    if (path != null) {
+                        MediaScannerConnection.scanFile(this, arrayOf(path), null, null)
+                    }
+                    result.success(true)
+                }
                 "compressArchive" -> {
                     val sourcePath = call.argument<String>("sourcePath")
                     val targetPath = call.argument<String>("targetPath")

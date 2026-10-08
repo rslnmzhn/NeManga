@@ -38,25 +38,69 @@ class CompressionResult {
 class CompressorService {
   static const MethodChannel _channel = MethodChannel('com.nemanga.reader/compressor');
 
+  /// Получить общедоступную папку 'NeManga', видимую в проводнике Android (Downloads/NeManga)
+  static Future<Directory> getPublicMangaDirectory() async {
+    try {
+      if (Platform.isAndroid) {
+        final path = await _channel.invokeMethod<String>('getPublicMangaDirectory');
+        if (path != null) {
+          final dir = Directory(path);
+          if (!await dir.exists()) {
+            await dir.create(recursive: true);
+          }
+          return dir;
+        }
+      }
+    } catch (_) {}
+
+    final extDir = await getExternalStorageDirectory();
+    final fallback = Directory(
+      p.join(extDir?.path ?? (await getApplicationDocumentsDirectory()).path, 'NeManga'),
+    );
+    if (!await fallback.exists()) {
+      await fallback.create(recursive: true);
+    }
+    return fallback;
+  }
+
+  /// Уведомить Android MediaScanner о новом файле
+  static Future<void> scanMediaFile(String path) async {
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod('scanMediaFile', {'path': path});
+      }
+    } catch (_) {}
+  }
+
   /// Сжать архив манги в высокоэффективный формат WebP
   static Future<CompressionResult> compressArchive({
     required String sourcePath,
     int maxWidth = 1440,
     int quality = 80,
-    bool replaceOriginal = true,
+    bool saveToPublicFolder = true,
+    bool deleteOriginal = false,
   }) async {
     final sourceFile = File(sourcePath);
     if (!await sourceFile.exists()) {
       throw Exception('Файл архива не найден: $sourcePath');
     }
 
-    final ext = p.extension(sourcePath);
-    final dir = p.dirname(sourcePath);
+    final originalSize = await sourceFile.length();
     final baseName = p.basenameWithoutExtension(sourcePath);
 
-    // Временный путь для сжатого файла
+    // Определяем конечное местоположение
+    late String finalDestinationPath;
+    if (saveToPublicFolder) {
+      final publicDir = await getPublicMangaDirectory();
+      finalDestinationPath = p.join(publicDir.path, '$baseName.cbz');
+    } else {
+      final dir = p.dirname(sourcePath);
+      finalDestinationPath = p.join(dir, '$baseName.cbz');
+    }
+
+    // Временный файл сжатия
     final tempDir = await getTemporaryDirectory();
-    final tempTargetPath = p.join(tempDir.path, '${baseName}_optimized$ext');
+    final tempTargetPath = p.join(tempDir.path, '${baseName}_compressed_${DateTime.now().millisecondsSinceEpoch}.cbz');
 
     final result = await _channel.invokeMapMethod<String, dynamic>('compressArchive', {
       'sourcePath': sourcePath,
@@ -69,38 +113,40 @@ class CompressorService {
       throw Exception('Не удалось выполнить сжатие архива');
     }
 
-    final originalSize = (result['originalSize'] as num).toInt();
     final compressedSize = (result['compressedSize'] as num).toInt();
     final savedPercent = (result['savedPercent'] as num).toDouble();
     final totalImages = (result['totalImages'] as num).toInt();
 
-    String finalPath = tempTargetPath;
+    final tempFile = File(tempTargetPath);
 
-    if (replaceOriginal) {
-      final tempFile = File(tempTargetPath);
-      final destPath = p.join(dir, '$baseName.cbz');
+    // Перемещаем в итоговую папку
+    if (finalDestinationPath == sourcePath) {
+      // Перезапись исходного файла
+      final backup = File('$sourcePath.bak');
+      await sourceFile.rename(backup.path);
+      await tempFile.copy(sourcePath);
+      await tempFile.delete();
+      if (await backup.exists()) {
+        await backup.delete();
+      }
+    } else {
+      final destFile = File(finalDestinationPath);
+      if (await destFile.exists()) {
+        await destFile.delete();
+      }
+      await tempFile.copy(finalDestinationPath);
+      await tempFile.delete();
 
-      if (destPath != sourcePath) {
-        // Если меняем расширение на .cbz
-        await tempFile.copy(destPath);
-        await tempFile.delete();
+      // Если пользователь захотел удалить оригинальный архив для экономии памяти
+      if (deleteOriginal && await sourceFile.exists()) {
         await sourceFile.delete();
-        finalPath = destPath;
-      } else {
-        // Перезаписываем оригинальный файл
-        final backupPath = '$sourcePath.tmp';
-        await sourceFile.rename(backupPath);
-        await tempFile.copy(sourcePath);
-        await tempFile.delete();
-        final backupFile = File(backupPath);
-        if (await backupFile.exists()) {
-          await backupFile.delete();
-        }
-        finalPath = sourcePath;
       }
     }
 
-    // Очищаем старый кэш распакованных страниц этой книги, так как файлы изменились на компактные WebP
+    // Уведомляем систему для отображения в проводнике
+    await scanMediaFile(finalDestinationPath);
+
+    // Очищаем старый кэш распакованных страниц
     final hash = ArchiveService.getArchiveHash(sourcePath, originalSize);
     final oldCache = Directory(p.join(tempDir.path, 'nemanga_cache', hash));
     if (await oldCache.exists()) {
@@ -111,23 +157,37 @@ class CompressorService {
       }
     }
 
-    // Обновляем метаданные в библиотеке
-    final recentBooks = await StorageService.getRecentBooks();
-    final existing = recentBooks.where((b) => b.filePath == sourcePath || b.filePath == finalPath).firstOrNull;
-    if (existing != null) {
-      final updated = existing.copyWith(
-        filePath: finalPath,
-        fileSize: compressedSize,
-        isOptimized: true,
-      );
-      await StorageService.updateBook(updated);
+    // Обновляем метаданные в библиотеке и группах
+    final groups = await StorageService.getMangaGroups();
+    for (final group in groups) {
+      bool groupChanged = false;
+      final updatedChapters = group.chapters.map((ch) {
+        if (ch.filePath == sourcePath) {
+          groupChanged = true;
+          return ch.copyWith(
+            id: finalDestinationPath,
+            filePath: finalDestinationPath,
+            fileSize: compressedSize,
+            isOptimized: true,
+          );
+        }
+        return ch;
+      }).toList();
+
+      if (groupChanged) {
+        final updatedGroup = group.copyWith(
+          chapters: updatedChapters,
+          updatedAt: DateTime.now(),
+        );
+        await StorageService.saveMangaGroup(updatedGroup);
+      }
     }
 
     return CompressionResult(
       originalSize: originalSize,
       compressedSize: compressedSize,
       savedPercent: savedPercent,
-      targetPath: finalPath,
+      targetPath: finalDestinationPath,
       totalImages: totalImages,
     );
   }

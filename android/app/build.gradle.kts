@@ -36,6 +36,8 @@ android {
         versionName = flutter.versionName
     }
 
+    val defaultKeystore = file("nemanga-release.jks")
+
     signingConfigs {
         create("release") {
             val keyPasswordProp = keystoreProperties.getProperty("keyPassword")
@@ -43,19 +45,23 @@ android {
             val storePasswordProp = keystoreProperties.getProperty("storePassword")
             val storeFileProp = keystoreProperties.getProperty("storeFile")
 
-            if (storeFileProp != null) {
+            if (storeFileProp != null && keystorePropertiesFile.exists()) {
                 keyAlias = keyAliasProp
                 keyPassword = keyPasswordProp
                 storeFile = file(storeFileProp)
                 storePassword = storePasswordProp
+            } else if (defaultKeystore.exists()) {
+                keyAlias = "nemanga"
+                keyPassword = "nemangareader"
+                storeFile = defaultKeystore
+                storePassword = "nemangareader"
             }
         }
     }
 
     buildTypes {
         release {
-            val hasKeystore = keystorePropertiesFile.exists() && keystoreProperties.getProperty("storeFile") != null
-            signingConfig = if (hasKeystore) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

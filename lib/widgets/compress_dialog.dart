@@ -29,6 +29,8 @@ class CompressDialog extends StatefulWidget {
 
 class _CompressDialogState extends State<CompressDialog> {
   bool _isCompressing = false;
+  bool _deleteOriginal = true;
+  bool _saveToPublicFolder = true;
   CompressionResult? _result;
   String? _error;
 
@@ -55,7 +57,8 @@ class _CompressDialogState extends State<CompressDialog> {
         sourcePath: widget.book.filePath,
         maxWidth: 1440,
         quality: 80,
-        replaceOriginal: true,
+        saveToPublicFolder: _saveToPublicFolder,
+        deleteOriginal: _deleteOriginal,
       );
 
       setState(() {
@@ -98,126 +101,165 @@ class _CompressDialogState extends State<CompressDialog> {
           ),
         ],
       ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_result == null && !_isCompressing) ...[
-            Text(
-              widget.book.title,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-            ),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(12),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_result == null && !_isCompressing) ...[
+              Text(
+                widget.book.title,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
               ),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Текущий размер архива:', style: TextStyle(color: Colors.grey)),
-                      Text(
-                        _formatBytes(widget.book.fileSize),
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  if (widget.book.isOptimized) ...[
-                    const SizedBox(height: 6),
-                    const Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('Статус:', style: TextStyle(color: Colors.grey)),
-                        Text('Уже сжат (WebP)', style: TextStyle(color: Colors.greenAccent)),
-                      ],
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Размер исходного архива:', style: TextStyle(color: Colors.grey)),
+                    Text(
+                      _formatBytes(widget.book.fileSize),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ],
-                ],
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Нативный компрессор конвертирует сканы в оптимизированный WebP (до 1440p) с аппаратным кодированием Android. Это освободит до 70–85% памяти архива и кэша.',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 13),
-            ),
-          ],
-          if (_isCompressing) ...[
-            const Center(child: CircularProgressIndicator()),
-            const SizedBox(height: 16),
-            const Center(
-              child: Text(
-                'Аппаратное сжатие страниц...',
-                style: TextStyle(fontSize: 14, color: Colors.grey),
+              const SizedBox(height: 12),
+              Text(
+                'Аппаратное кодирование WebP уменьшает размер страниц на 70–85% без видимой потери качества.',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 13),
               ),
-            ),
-          ],
-          if (_result != null) ...[
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.green.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.3)),
+              const SizedBox(height: 12),
+              // Чекбокс: Сохранить в папку NeManga
+              CheckboxListTile(
+                value: _saveToPublicFolder,
+                contentPadding: EdgeInsets.zero,
+                activeColor: primary,
+                title: const Text(
+                  'Сохранить в папку "NeManga"',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text(
+                  'Папка Download/NeManga видна в проводнике Android',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                onChanged: (val) {
+                  setState(() {
+                    _saveToPublicFolder = val ?? true;
+                  });
+                },
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.check_circle, color: Colors.greenAccent, size: 22),
-                      SizedBox(width: 8),
-                      Text(
-                        'Архив успешно сжат!',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.greenAccent),
+              // Чекбокс: Удалить оригинальный архив
+              CheckboxListTile(
+                value: _deleteOriginal,
+                contentPadding: EdgeInsets.zero,
+                activeColor: Colors.redAccent,
+                title: const Text(
+                  'Удалить оригинальный zip-архив',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  'Освободит ${_formatBytes(widget.book.fileSize)} памяти устройства',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                onChanged: (val) {
+                  setState(() {
+                    _deleteOriginal = val ?? true;
+                  });
+                },
+              ),
+            ],
+            if (_isCompressing) ...[
+              const Center(child: CircularProgressIndicator()),
+              const SizedBox(height: 16),
+              const Center(
+                child: Text(
+                  'Аппаратное сжатие страниц в WebP...',
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+              ),
+            ],
+            if (_result != null) ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.greenAccent, size: 22),
+                        SizedBox(width: 8),
+                        Text(
+                          'Архив успешно сжат!',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.greenAccent),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Было:', style: TextStyle(color: Colors.grey)),
+                        Text(_formatBytes(_result!.originalSize)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Стало:', style: TextStyle(color: Colors.grey)),
+                        Text(
+                          _formatBytes(_result!.compressedSize),
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Освобождено:', style: TextStyle(fontWeight: FontWeight.bold)),
+                        Text(
+                          '${_result!.savedBytesFormatted} (-${_result!.savedPercent.toStringAsFixed(0)}%)',
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Сохранен в: ${_result!.targetPath}',
+                      style: const TextStyle(fontSize: 11, color: Colors.white70),
+                    ),
+                    if (_deleteOriginal) ...[
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Оригинальный архив удален для освобождения памяти.',
+                        style: TextStyle(fontSize: 11, color: Colors.greenAccent),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Было:', style: TextStyle(color: Colors.grey)),
-                      Text(_formatBytes(_result!.originalSize)),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Стало:', style: TextStyle(color: Colors.grey)),
-                      Text(
-                        _formatBytes(_result!.compressedSize),
-                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent),
-                      ),
-                    ],
-                  ),
-                  const Divider(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Освобождено:', style: TextStyle(fontWeight: FontWeight.bold)),
-                      Text(
-                        '${_result!.savedBytesFormatted} (-${_result!.savedPercent.toStringAsFixed(0)}%)',
-                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent),
-                      ),
-                    ],
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Ошибка: $_error',
+                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+              ),
+            ],
           ],
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              'Ошибка: $_error',
-              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-            ),
-          ],
-        ],
+        ),
       ),
       actions: [
         if (_result == null && !_isCompressing) ...[
