@@ -152,11 +152,13 @@ jobs:
             echo "Signing secrets not configured, building standard APK."
           fi
 
-      - name: Build APKs (split per ABI)
-        run: flutter build apk --release --split-per-abi
-
-      - name: Build Universal APK
-        run: flutter build apk --release
+      - name: Build APKs (split per ABI and universal)
+        run: |
+          mkdir -p apk_output
+          flutter build apk --release --split-per-abi
+          cp build/app/outputs/flutter-apk/app-*.apk apk_output/
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk apk_output/
 
       - name: Clean up temporary signing files
         if: always()
@@ -168,10 +170,10 @@ jobs:
         with:
           name: android-apk-release
           path: |
-            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            build/app/outputs/flutter-apk/app-x86_64-release.apk
-            build/app/outputs/flutter-apk/app-release.apk
+            apk_output/app-armeabi-v7a-release.apk
+            apk_output/app-arm64-v8a-release.apk
+            apk_output/app-x86_64-release.apk
+            apk_output/app-release.apk
           if-no-files-found: error
 
   publish_release:
@@ -204,12 +206,13 @@ jobs:
           VERSION="${{ needs.resolve_release.outputs.release_version }}"
 
           cd release_assets
-          cp app-armeabi-v7a-release.apk "NeManga-v${VERSION}-android-armeabi-v7a.apk"
-          cp app-arm64-v8a-release.apk "NeManga-v${VERSION}-android-arm64-v8a.apk"
-          cp app-x86_64-release.apk "NeManga-v${VERSION}-android-x86_64.apk"
-          cp app-release.apk "NeManga-v${VERSION}-android-universal.apk"
+          find . -name "app-armeabi-v7a-release.apk" -exec cp {} "NeManga-v${VERSION}-android-armeabi-v7a.apk" \;
+          find . -name "app-arm64-v8a-release.apk" -exec cp {} "NeManga-v${VERSION}-android-arm64-v8a.apk" \;
+          find . -name "app-x86_64-release.apk" -exec cp {} "NeManga-v${VERSION}-android-x86_64.apk" \;
+          find . -name "app-release.apk" -exec cp {} "NeManga-v${VERSION}-android-universal.apk" \;
 
-          rm -f app-*-release.apk app-release.apk
+          find . -name "app-*-release.apk" -delete || true
+          find . -name "app-release.apk" -delete || true
 
           sha256sum NeManga-*.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt

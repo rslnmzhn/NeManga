@@ -70,3 +70,9 @@ awk -v version="${CLEAN_VERSION}" -v version_code="${RELEASE_VERSION_CODE}" '
 
 mv "${TEMP_FILE}" "${PUBSPEC_PATH}"
 grep -n "^version:" "${PUBSPEC_PATH}"
+
+UPDATE_SERVICE_PATH="${ROOT_DIR}/lib/services/update_service.dart"
+if [[ -f "${UPDATE_SERVICE_PATH}" ]]; then
+  sed -i -E "s/static String _cachedCurrentVersion = '[^']*';/static String _cachedCurrentVersion = '${CLEAN_VERSION}';/g" "${UPDATE_SERVICE_PATH}"
+  echo "Updated _cachedCurrentVersion in ${UPDATE_SERVICE_PATH} to ${CLEAN_VERSION}"
+fi

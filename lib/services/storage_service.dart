@@ -75,6 +75,55 @@ class StorageService {
     await saveAllGroups(current);
   }
 
+  /// Атомарно заменить путь к файлу главы во всех сохраненных группах манги (при сжатии или перемещении)
+  static Future<void> replaceChapterFilePath({
+    required String oldPath,
+    required String newPath,
+    required int newSize,
+    required bool isOptimized,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final groupJsonList = prefs.getStringList(_keyMangaGroups);
+    if (groupJsonList == null || groupJsonList.isEmpty) return;
+
+    final updatedJsonList = <String>[];
+    for (final item in groupJsonList) {
+      try {
+        final group = MangaGroup.fromJson(item);
+        bool changed = false;
+        final chapters = group.chapters.map((ch) {
+          if (ch.filePath == oldPath || ch.id == oldPath) {
+            changed = true;
+            return ch.copyWith(
+              id: newPath,
+              filePath: newPath,
+              fileSize: newSize,
+              isOptimized: isOptimized,
+            );
+          }
+          return ch;
+        }).toList();
+
+        final newGroupId = (group.id == oldPath) ? newPath : group.id;
+
+        if (changed || newGroupId != group.id) {
+          final updatedGroup = group.copyWith(
+            id: newGroupId,
+            chapters: chapters,
+            updatedAt: DateTime.now(),
+          );
+          updatedJsonList.add(updatedGroup.toJson());
+        } else {
+          updatedJsonList.add(item);
+        }
+      } catch (_) {
+        updatedJsonList.add(item);
+      }
+    }
+
+    await prefs.setStringList(_keyMangaGroups, updatedJsonList);
+  }
+
   /// Найти или создать группу для открываемого архива
   static Future<MangaGroup> findOrCreateGroupForFile({
     required String filePath,

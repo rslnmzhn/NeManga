@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'compressor_service.dart';
 
 class AppUpdateInfo {
   final String version;
@@ -24,9 +26,25 @@ class AppUpdateInfo {
 
 class UpdateService {
   static const MethodChannel _channel = MethodChannel('com.nemanga.reader/updater');
-  static const String currentVersion = '0.0.1';
+  static String _cachedCurrentVersion = '0.0.5';
+  static String get currentVersion => _cachedCurrentVersion;
   static const String repoOwner = 'rslnmzhn';
   static const String repoName = 'NeManga';
+
+  /// Получить актуальную версию установленного приложения из PackageManager
+  static Future<String> getCurrentVersion() async {
+    try {
+      if (Platform.isAndroid) {
+        final version = await _channel.invokeMethod<String>('getAppVersion');
+        if (version != null && version.trim().isNotEmpty) {
+          final clean = version.split('+').first.trim();
+          _cachedCurrentVersion = clean;
+          return clean;
+        }
+      }
+    } catch (_) {}
+    return _cachedCurrentVersion;
+  }
 
   /// Сравнение версий: возвращает true, если candidate новее current
   static bool isNewerVersion(String current, String candidate) {
@@ -85,8 +103,9 @@ class UpdateService {
       final releaseNotes = json['body'] as String? ?? '';
       final assets = (json['assets'] as List<dynamic>? ?? []);
 
+      final installedVersion = await getCurrentVersion();
       final candidateVersion = tagName.replaceFirst(RegExp(r'^v'), '');
-      if (!isNewerVersion(currentVersion, candidateVersion)) {
+      if (!isNewerVersion(installedVersion, candidateVersion)) {
         return null; // Уже актуальная версия
       }
 
@@ -192,6 +211,17 @@ class UpdateService {
       await sink.flush();
       await sink.close();
 
+      // Копируем APK в общедоступную папку Загрузки/NeManga,
+      // чтобы пользователь мог видеть файл в проводнике и установить его вручную при конфликте подписей
+      try {
+        final publicDir = await CompressorService.getPublicMangaDirectory();
+        final publicApk = File(p.join(publicDir.path, update.fileName));
+        await targetFile.copy(publicApk.path);
+        await CompressorService.scanMediaFile(publicApk.path);
+      } catch (e) {
+        debugPrint('Ошибка копирования APK в общедоступную папку: $e');
+      }
+
       // Запускаем нативную установку APK
       if (Platform.isAndroid) {
         final installResult = await _channel.invokeMethod<String>('installApk', {
@@ -204,5 +234,16 @@ class UpdateService {
     } finally {
       client.close();
     }
+  }
+
+  /// Нативная установка ранее скачанного APK
+  static Future<String> installApkFile(String filePath) async {
+    if (Platform.isAndroid) {
+      final res = await _channel.invokeMethod<String>('installApk', {
+        'filePath': filePath,
+      });
+      return res ?? 'installerLaunched';
+    }
+    return 'unsupported';
   }
 }

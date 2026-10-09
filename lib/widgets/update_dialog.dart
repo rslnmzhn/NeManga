@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/compressor_service.dart';
 import '../services/update_service.dart';
 
 class UpdateDialog extends StatefulWidget {
@@ -20,9 +21,23 @@ class UpdateDialog extends StatefulWidget {
 
 class _UpdateDialogState extends State<UpdateDialog> {
   bool _isDownloading = false;
+  bool _isDownloaded = false;
   double _progress = 0.0;
   String _statusText = '';
   String? _errorMessage;
+  String _installedVersion = UpdateService.currentVersion;
+
+  @override
+  void initState() {
+    super.initState();
+    UpdateService.getCurrentVersion().then((v) {
+      if (mounted) {
+        setState(() {
+          _installedVersion = v;
+        });
+      }
+    });
+  }
 
   String _formatBytes(int bytes) {
     if (bytes <= 0) return '';
@@ -39,6 +54,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
   Future<void> _startUpdate() async {
     setState(() {
       _isDownloading = true;
+      _isDownloaded = false;
       _progress = 0.0;
       _statusText = 'Загрузка обновления...';
       _errorMessage = null;
@@ -60,18 +76,39 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
       if (!mounted) return;
 
+      setState(() {
+        _isDownloading = false;
+        _isDownloaded = true;
+      });
+
       if (result == 'pendingPermission') {
         setState(() {
-          _statusText = 'Требуется разрешение на установку APK';
+          _statusText = 'Требуется разрешение на установку APK из внешних источников';
         });
       } else {
-        Navigator.pop(context);
+        setState(() {
+          _statusText = 'Файл скачан! Установщик системы запущен.';
+        });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _isDownloading = false;
           _errorMessage = 'Ошибка установки: $e';
+        });
+      }
+    }
+  }
+
+  Future<void> _retryInstall() async {
+    try {
+      final publicDir = await CompressorService.getPublicMangaDirectory();
+      final apkPath = '${publicDir.path}/${widget.updateInfo.fileName}';
+      await UpdateService.installApkFile(apkPath);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Не удалось запустить установщик: $e';
         });
       }
     }
@@ -118,7 +155,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Текущая: v${UpdateService.currentVersion}',
+                  'Текущая: v$_installedVersion',
                   style: const TextStyle(color: Colors.grey, fontSize: 13),
                 ),
                 Icon(Icons.arrow_forward, size: 16, color: primary),
@@ -176,6 +213,48 @@ class _UpdateDialogState extends State<UpdateDialog> {
               ),
             ),
           ],
+          if (_isDownloaded) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.info_outline_rounded, color: Colors.amber, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Если «конфликтует с другим пакетом»:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            color: Colors.amber,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Установленная версия имеет другую цифровую подпись (debug/тестовая сборка). Файл обновления сохранён в общедоступную папку:\n📁 Загрузки/NeManga',
+                    style: TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    'Для обновления:\n1. Удалите текущую версию NeManga с телефона (ваши манга-файлы в Загрузках сохранятся)\n2. Откройте Загрузки/NeManga и установите скачанный APK',
+                    style: TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (_errorMessage != null) ...[
             const SizedBox(height: 12),
             Text(
@@ -187,19 +266,36 @@ class _UpdateDialogState extends State<UpdateDialog> {
       ),
       actions: [
         if (!_isDownloading) ...[
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Позже', style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: primary,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          if (_isDownloaded) ...[
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Закрыть', style: TextStyle(color: Colors.grey)),
             ),
-            onPressed: _startUpdate,
-            child: const Text('Обновить'),
-          ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: const Icon(Icons.install_mobile_rounded, size: 18),
+              onPressed: _retryInstall,
+              label: const Text('Запустить установку'),
+            ),
+          ] else ...[
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Позже', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: _startUpdate,
+              child: const Text('Обновить'),
+            ),
+          ],
         ],
       ],
     );

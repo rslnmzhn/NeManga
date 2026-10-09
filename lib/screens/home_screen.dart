@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
+import '../services/compressor_service.dart';
 import '../services/storage_service.dart';
 import '../services/update_service.dart';
 import '../widgets/compress_dialog.dart';
@@ -55,10 +56,12 @@ class _HomeScreenState extends State<HomeScreen> {
       if (update != null) {
         UpdateDialog.show(context, update);
       } else if (!silent) {
+        final current = await UpdateService.getCurrentVersion();
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('У вас установлена последняя версия NeManga'),
-            duration: Duration(seconds: 2),
+          SnackBar(
+            content: Text('У вас установлена последняя версия NeManga (v$current)'),
+            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -136,15 +139,77 @@ class _HomeScreenState extends State<HomeScreen> {
     final validPaths = files.map((f) => f.path).whereType<String>().toList();
     if (validPaths.isEmpty) return;
 
+    if (!mounted) return;
+
+    // Предлагаем сжатие добавленных zip/cbz архивов с опцией удаления оригинала
+    final choice = await PromptCompressAddedDialog.show(
+      context,
+      filePaths: validPaths,
+    );
+
+    if (choice == null) return;
+
     setState(() {
       _isLoading = true;
-      _loadingMessage = 'Подготовка файлов...';
+      _loadingMessage = choice.shouldCompress ? 'Сжатие архивов в WebP...' : 'Подготовка файлов...';
     });
 
     try {
-      if (validPaths.length == 1) {
+      final processedPaths = <String>[];
+      int totalOriginal = 0;
+      int totalCompressed = 0;
+
+      if (choice.shouldCompress) {
+        for (int i = 0; i < validPaths.length; i++) {
+          if (!mounted) break;
+          final path = validPaths[i];
+          final title = p.basenameWithoutExtension(path);
+          setState(() {
+            _loadingMessage = 'Сжатие ${i + 1} из ${validPaths.length}: $title...';
+          });
+
+          try {
+            final res = await CompressorService.compressArchive(
+              sourcePath: path,
+              quality: choice.quality,
+              maxWidth: choice.maxWidth,
+              saveToPublicFolder: true,
+              deleteOriginal: choice.deleteOriginal,
+            );
+            processedPaths.add(res.targetPath);
+            totalOriginal += res.originalSize;
+            totalCompressed += res.compressedSize;
+          } catch (e) {
+            debugPrint('Ошибка сжатия $path: $e');
+            processedPaths.add(path);
+          }
+        }
+
+        if (mounted && totalOriginal > totalCompressed) {
+          final savedBytes = totalOriginal - totalCompressed;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Сжато архивов: ${processedPaths.length}. Сохранено в Загрузки/NeManga. Освобождено: ${_formatFileSize(savedBytes)}',
+              ),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        processedPaths.addAll(validPaths);
+      }
+
+      if (processedPaths.isEmpty) {
+        setState(() {
+          _isLoading = false;
+        });
+        return;
+      }
+
+      if (processedPaths.length == 1) {
         // Один архив: открываем сразу
-        final filePath = validPaths.first;
+        final filePath = processedPaths.first;
         final info = await ArchiveService.loadManga(filePath);
 
         final group = await StorageService.findOrCreateGroupForFile(
@@ -175,8 +240,8 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       } else {
         // Несколько архивов: объединяем в одну группу манги
-        validPaths.sort(ArchiveService.naturalCompare);
-        final firstPath = validPaths.first;
+        processedPaths.sort(ArchiveService.naturalCompare);
+        final firstPath = processedPaths.first;
         final parentDirName = p.basename(p.dirname(firstPath));
         final groupTitle = (parentDirName.isNotEmpty && parentDirName != '.' && parentDirName != '/')
             ? parentDirName
@@ -185,8 +250,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final chapters = <ChapterItem>[];
         String? groupCover;
 
-        for (int i = 0; i < validPaths.length; i++) {
-          final path = validPaths[i];
+        for (int i = 0; i < processedPaths.length; i++) {
+          final path = processedPaths[i];
           final title = p.basenameWithoutExtension(path);
           final size = File(path).existsSync() ? File(path).lengthSync() : 0;
 
@@ -387,6 +452,54 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _showAboutDialog() async {
+    final version = await UpdateService.getCurrentVersion();
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: Image.asset(
+                'assets/icon/app_icon.png',
+                width: 96,
+                height: 96,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'NeManga',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Версия v$version',
+              style: const TextStyle(fontSize: 14, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Быстрый и удобный оффлайн-ридер манги для Android с поддержкой сжатия архивов в WebP.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Закрыть'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -400,12 +513,20 @@ class _HomeScreenState extends State<HomeScreen> {
         title: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: primary.withValues(alpha: 0.18),
+                color: Colors.white.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(Icons.menu_book_rounded, color: primary, size: 22),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.asset(
+                  'assets/icon/app_icon.png',
+                  width: 28,
+                  height: 28,
+                  fit: BoxFit.cover,
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             const Text(
@@ -428,6 +549,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.cleaning_services_outlined),
             tooltip: 'Очистить кэш страниц',
             onPressed: _confirmClearCache,
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline_rounded),
+            tooltip: 'О приложении',
+            onPressed: _showAboutDialog,
           ),
         ],
       ),
@@ -979,7 +1105,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onSaved: _loadData,
                               );
                             } else if (val == 'compress') {
-                              if (group.chapters.isNotEmpty) {
+                              if (group.chapters.length == 1) {
                                 final ch = group.chapters.first;
                                 CompressDialog.show(
                                   context,
@@ -992,6 +1118,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                     fileSize: ch.fileSize,
                                     isOptimized: ch.isOptimized,
                                   ),
+                                  onCompressed: _loadData,
+                                );
+                              } else if (group.chapters.length > 1) {
+                                BatchCompressDialog.show(
+                                  context,
+                                  group: group,
                                   onCompressed: _loadData,
                                 );
                               }

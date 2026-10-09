@@ -75,6 +75,7 @@ class CompressorService {
   /// Сжать архив манги в высокоэффективный формат WebP
   static Future<CompressionResult> compressArchive({
     required String sourcePath,
+    String? subFolder,
     int maxWidth = 1440,
     int quality = 80,
     bool saveToPublicFolder = true,
@@ -92,7 +93,16 @@ class CompressorService {
     late String finalDestinationPath;
     if (saveToPublicFolder) {
       final publicDir = await getPublicMangaDirectory();
-      finalDestinationPath = p.join(publicDir.path, '$baseName.cbz');
+      if (subFolder != null && subFolder.trim().isNotEmpty) {
+        final sanitized = subFolder.trim().replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+        final targetSubDir = Directory(p.join(publicDir.path, sanitized));
+        if (!await targetSubDir.exists()) {
+          await targetSubDir.create(recursive: true);
+        }
+        finalDestinationPath = p.join(targetSubDir.path, '$baseName.cbz');
+      } else {
+        finalDestinationPath = p.join(publicDir.path, '$baseName.cbz');
+      }
     } else {
       final dir = p.dirname(sourcePath);
       finalDestinationPath = p.join(dir, '$baseName.cbz');
@@ -123,6 +133,7 @@ class CompressorService {
     if (finalDestinationPath == sourcePath) {
       // Перезапись исходного файла
       final backup = File('$sourcePath.bak');
+      if (await backup.exists()) await backup.delete();
       await sourceFile.rename(backup.path);
       await tempFile.copy(sourcePath);
       await tempFile.delete();
@@ -136,11 +147,20 @@ class CompressorService {
       }
       await tempFile.copy(finalDestinationPath);
       await tempFile.delete();
+    }
 
-      // Если пользователь захотел удалить оригинальный архив для экономии памяти
-      if (deleteOriginal && await sourceFile.exists()) {
-        await sourceFile.delete();
-      }
+    // Атомарно заменяем путь к архиву в базе данных SharedPreferences
+    await StorageService.replaceChapterFilePath(
+      oldPath: sourcePath,
+      newPath: finalDestinationPath,
+      newSize: compressedSize,
+      isOptimized: true,
+    );
+
+    // Только после обновления базы данных удаляем старый оригинальный файл (если путь отличается)
+    if (finalDestinationPath != sourcePath && deleteOriginal && await sourceFile.exists()) {
+      await sourceFile.delete();
+      await scanMediaFile(sourcePath);
     }
 
     // Уведомляем систему для отображения в проводнике
@@ -157,29 +177,16 @@ class CompressorService {
       }
     }
 
-    // Обновляем метаданные в библиотеке и группах
+    // Обновляем обложку, если её не было
     final groups = await StorageService.getMangaGroups();
     for (final group in groups) {
-      bool groupChanged = false;
-      final updatedChapters = group.chapters.map((ch) {
-        if (ch.filePath == sourcePath) {
-          groupChanged = true;
-          return ch.copyWith(
-            id: finalDestinationPath,
-            filePath: finalDestinationPath,
-            fileSize: compressedSize,
-            isOptimized: true,
-          );
+      if (group.chapters.any((c) => c.filePath == finalDestinationPath)) {
+        if (group.coverPath == null || !File(group.coverPath!).existsSync()) {
+          final newCover = await ArchiveService.extractCoverOnly(finalDestinationPath);
+          if (newCover != null) {
+            await StorageService.saveMangaGroup(group.copyWith(coverPath: newCover));
+          }
         }
-        return ch;
-      }).toList();
-
-      if (groupChanged) {
-        final updatedGroup = group.copyWith(
-          chapters: updatedChapters,
-          updatedAt: DateTime.now(),
-        );
-        await StorageService.saveMangaGroup(updatedGroup);
       }
     }
 

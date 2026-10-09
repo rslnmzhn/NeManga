@@ -79,27 +79,85 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
       );
 
       if (files.isNotEmpty) {
+        final validPaths = files.map((f) => f.path).whereType<String>().toList();
+        if (validPaths.isEmpty) return;
+
+        if (!mounted) return;
+
+        // Предлагаем сжатие добавленных глав с опцией удаления оригиналов
+        final choice = await PromptCompressAddedDialog.show(
+          context,
+          filePaths: validPaths,
+          title: 'Сжать добавленные главы?',
+        );
+
+        if (choice == null) return;
+
         setState(() {
           _isLoading = true;
-          _loadingMessage = 'Добавление глав...';
+          _loadingMessage = choice.shouldCompress ? 'Сжатие глав в WebP...' : 'Добавление глав...';
         });
 
-        final newChapters = <ChapterItem>[];
-        for (final file in files) {
-          if (file.path != null) {
-            final path = file.path!;
+        final processedPaths = <String>[];
+        int totalOriginal = 0;
+        int totalCompressed = 0;
+
+        if (choice.shouldCompress) {
+          for (int i = 0; i < validPaths.length; i++) {
+            if (!mounted) break;
+            final path = validPaths[i];
             final title = p.basenameWithoutExtension(path);
-            final size = File(path).existsSync() ? File(path).lengthSync() : 0;
-            newChapters.add(ChapterItem(
-              id: path,
-              filePath: path,
-              title: title,
-              totalPages: 0,
-              lastPage: 0,
-              lastReadTime: DateTime.now(),
-              fileSize: size,
-            ));
+            setState(() {
+              _loadingMessage = 'Сжатие ${i + 1} из ${validPaths.length}: $title...';
+            });
+
+            try {
+              final res = await CompressorService.compressArchive(
+                sourcePath: path,
+                subFolder: _manga.title,
+                quality: choice.quality,
+                maxWidth: choice.maxWidth,
+                saveToPublicFolder: true,
+                deleteOriginal: choice.deleteOriginal,
+              );
+              processedPaths.add(res.targetPath);
+              totalOriginal += res.originalSize;
+              totalCompressed += res.compressedSize;
+            } catch (e) {
+              debugPrint('Ошибка сжатия $path: $e');
+              processedPaths.add(path);
+            }
           }
+
+          if (mounted && totalOriginal > totalCompressed) {
+            final savedBytes = totalOriginal - totalCompressed;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Сжато глав: ${processedPaths.length}. Сохранено в Загрузки/NeManga. Освобождено: ${_formatFileSize(savedBytes)}',
+                ),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } else {
+          processedPaths.addAll(validPaths);
+        }
+
+        final newChapters = <ChapterItem>[];
+        for (final path in processedPaths) {
+          final title = p.basenameWithoutExtension(path);
+          final size = File(path).existsSync() ? File(path).lengthSync() : 0;
+          newChapters.add(ChapterItem(
+            id: path,
+            filePath: path,
+            title: title,
+            totalPages: 0,
+            lastPage: 0,
+            lastReadTime: DateTime.now(),
+            fileSize: size,
+            isOptimized: choice.shouldCompress,
+          ));
         }
 
         // Естественная сортировка глав по названию
@@ -206,63 +264,11 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
       return;
     }
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Сжать все главы?'),
-        content: Text(
-          'Будет выполнено нативное сжатие ${uncompressed.length} глав в WebP. Это существенно освободит место.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Сжать все')),
-        ],
-      ),
+    BatchCompressDialog.show(
+      context,
+      group: _manga,
+      onCompressed: _refresh,
     );
-
-    if (confirmed != true) return;
-
-    setState(() {
-      _isLoading = true;
-      _loadingMessage = 'Сжатие 1 из ${uncompressed.length}...';
-    });
-
-    int count = 0;
-    int totalSaved = 0;
-    for (int i = 0; i < uncompressed.length; i++) {
-      if (!mounted) break;
-      final c = uncompressed[i];
-      setState(() {
-        _loadingMessage = 'Сжатие ${i + 1} из ${uncompressed.length}: ${c.title}...';
-      });
-
-      try {
-        final res = await CompressorService.compressArchive(
-          sourcePath: c.filePath,
-          maxWidth: 1440,
-          quality: 80,
-          saveToPublicFolder: true,
-          deleteOriginal: true,
-        );
-        totalSaved += (res.originalSize - res.compressedSize);
-        count++;
-      } catch (e) {
-        debugPrint('Ошибка сжатия главы: $e');
-      }
-    }
-
-    await _refresh();
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Сжато глав: $count. Освобождено: ${_formatFileSize(totalSaved)}'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    }
   }
 
   @override

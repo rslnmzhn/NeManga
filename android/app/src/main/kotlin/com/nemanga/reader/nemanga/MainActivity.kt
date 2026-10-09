@@ -2,6 +2,7 @@ package com.nemanga.reader.nemanga
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
@@ -34,6 +35,20 @@ class MainActivity : FlutterActivity() {
                 "getDeviceAbi" -> {
                     val abi = if (Build.SUPPORTED_ABIS.isNotEmpty()) Build.SUPPORTED_ABIS[0] else "arm64-v8a"
                     result.success(abi)
+                }
+                "getAppVersion" -> {
+                    try {
+                        val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+                        } else {
+                            @Suppress("DEPRECATION")
+                            packageManager.getPackageInfo(packageName, 0)
+                        }
+                        val vName = pInfo.versionName ?: "0.0.1"
+                        result.success(vName)
+                    } catch (_: Exception) {
+                        result.success("0.0.1")
+                    }
                 }
                 "canInstallPackages" -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -170,11 +185,11 @@ class MainActivity : FlutterActivity() {
         val targetFile = File(targetPath)
         targetFile.parentFile?.mkdirs()
 
-        val zipFile = ZipFile(sourceFile)
+        val zipFile = ZipFile(sourceFile, java.nio.charset.StandardCharsets.UTF_8)
         val entries = zipFile.entries().asSequence().toList()
 
         var imageCount = 0
-        ZipOutputStream(BufferedOutputStream(FileOutputStream(targetFile))).use { zos ->
+        ZipOutputStream(BufferedOutputStream(FileOutputStream(targetFile)), java.nio.charset.StandardCharsets.UTF_8).use { zos ->
             // Формат WebP
             val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 Bitmap.CompressFormat.WEBP_LOSSY

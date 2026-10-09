@@ -6,4 +6,10 @@
     <external-cache-path
         name="ext_updates"
         path="updates/" />
+    <external-path
+        name="external_files"
+        path="." />
+    <external-files-path
+        name="external_app_files"
+        path="." />
 </paths>
