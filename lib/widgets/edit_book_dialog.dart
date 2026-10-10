@@ -86,11 +86,19 @@ class _EditBookDialogState extends State<EditBookDialog> {
     super.dispose();
   }
 
-  void _addTag(String rawTag) {
-    final clean = rawTag.trim();
-    if (clean.isNotEmpty && !_tags.contains(clean)) {
+  void _addTag(String rawInput) {
+    final parts = rawInput
+        .split(RegExp(r'[\s,]+'))
+        .map((s) => s.trim().replaceAll(RegExp(r'^#+'), ''))
+        .where((s) => s.isNotEmpty);
+
+    if (parts.isNotEmpty) {
       setState(() {
-        _tags.add(clean);
+        for (final p in parts) {
+          if (!_tags.contains(p)) {
+            _tags.add(p);
+          }
+        }
       });
       _tagInputController.clear();
     }
@@ -192,7 +200,7 @@ class _EditBookDialogState extends State<EditBookDialog> {
                     controller: _tagInputController,
                     onSubmitted: _addTag,
                     decoration: InputDecoration(
-                      hintText: 'Добавить свой тег...',
+                      hintText: 'Добавить жанры (через пробел или запятую)...',
                       filled: true,
                       fillColor: const Color(0xFF242833),
                       border: OutlineInputBorder(

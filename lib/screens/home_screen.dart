@@ -23,10 +23,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   List<MangaGroup> _allGroups = [];
   List<MangaGroup> _filteredGroups = [];
-  List<String> _allTags = [];
 
   ReadingStatus? _selectedStatus;
-  String? _selectedTag;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
 
@@ -78,28 +76,39 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadData() async {
     final settings = await StorageService.loadSettings();
     final groups = await StorageService.getMangaGroups();
-    final tags = await StorageService.getAllTags();
 
     if (mounted) {
       setState(() {
         _settings = settings;
         _allGroups = groups;
-        _allTags = tags;
         _applyFilter();
       });
     }
   }
 
   void _applyFilter() {
+    // Токены поиска по названию и жанрам (через пробел или запятую)
+    final tokens = _searchQuery
+        .toLowerCase()
+        .split(RegExp(r'[\s,]+'))
+        .map((t) => t.trim().replaceAll(RegExp(r'^#+'), ''))
+        .where((t) => t.isNotEmpty)
+        .toList();
+
     _filteredGroups = _allGroups.where((group) {
-      final matchesSearch = _searchQuery.isEmpty ||
-          group.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          group.tags.any((t) => t.toLowerCase().contains(_searchQuery.toLowerCase()));
-
-      final matchesTag = _selectedTag == null || group.tags.contains(_selectedTag);
       final matchesStatus = _selectedStatus == null || group.status == _selectedStatus;
+      if (!matchesStatus) return false;
 
-      return matchesSearch && matchesTag && matchesStatus;
+      if (tokens.isEmpty) return true;
+
+      final titleLower = group.title.toLowerCase();
+      final tagsLower = group.tags.map((t) => t.toLowerCase()).toList();
+
+      return tokens.every((token) {
+        final matchesTitle = titleLower.contains(token);
+        final matchesTag = tagsLower.any((tag) => tag.contains(token));
+        return matchesTitle || matchesTag;
+      });
     }).toList();
   }
 
@@ -588,13 +597,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                           // Вкладки статусов: Все, Читаю, В планах, Прочитано
                           _buildStatusTabs(primary),
-                          const SizedBox(height: 10),
-
-                          // Фильтры по тегам
-                          if (_allTags.isNotEmpty) ...[
-                            _buildTagsFilterRow(primary),
-                            const SizedBox(height: 12),
-                          ],
+                          const SizedBox(height: 12),
                         ],
 
                         // Заголовок библиотеки
@@ -604,7 +607,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             Text(
                               _selectedStatus != null
                                   ? _selectedStatus!.label
-                                  : (_selectedTag != null ? 'Тег: #$_selectedTag' : 'Библиотека манги'),
+                                  : (_searchQuery.isNotEmpty ? 'Результаты поиска' : 'Библиотека манги'),
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
@@ -740,7 +743,7 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       },
       decoration: InputDecoration(
-        hintText: 'Поиск по названию или тегам...',
+        hintText: 'Поиск по названию или жанрам (через пробел или запятую)...',
         prefixIcon: const Icon(Icons.search, color: Colors.grey, size: 20),
         suffixIcon: _searchQuery.isNotEmpty
             ? IconButton(
@@ -765,62 +768,6 @@ class _HomeScreenState extends State<HomeScreen> {
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
         ),
-      ),
-    );
-  }
-
-  Widget _buildTagsFilterRow(Color primary) {
-    return SizedBox(
-      height: 34,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        children: [
-          ChoiceChip(
-            label: const Text('Все теги'),
-            selected: _selectedTag == null,
-            selectedColor: primary.withValues(alpha: 0.25),
-            backgroundColor: const Color(0xFF1E222A),
-            labelStyle: TextStyle(
-              fontSize: 12,
-              color: _selectedTag == null ? primary : Colors.white70,
-              fontWeight: _selectedTag == null ? FontWeight.bold : FontWeight.normal,
-            ),
-            side: BorderSide(color: _selectedTag == null ? primary : Colors.white12),
-            onSelected: (selected) {
-              if (selected) {
-                setState(() {
-                  _selectedTag = null;
-                  _applyFilter();
-                });
-              }
-            },
-          ),
-          const SizedBox(width: 8),
-          ..._allTags.map((tag) {
-            final isSelected = _selectedTag == tag;
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                label: Text('#$tag'),
-                selected: isSelected,
-                selectedColor: primary.withValues(alpha: 0.25),
-                backgroundColor: const Color(0xFF1E222A),
-                labelStyle: TextStyle(
-                  fontSize: 12,
-                  color: isSelected ? primary : Colors.white70,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                ),
-                side: BorderSide(color: isSelected ? primary : Colors.white12),
-                onSelected: (selected) {
-                  setState(() {
-                    _selectedTag = selected ? tag : null;
-                    _applyFilter();
-                  });
-                },
-              ),
-            );
-          }),
-        ],
       ),
     );
   }
@@ -852,7 +799,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            _searchQuery.isNotEmpty || _selectedTag != null || _selectedStatus != null
+            _searchQuery.isNotEmpty || _selectedStatus != null
                 ? 'По вашему запросу ничего не найдено.'
                 : 'Нажмите «+» внизу по центру, чтобы добавить первые zip/cbz архивы манги.',
             textAlign: TextAlign.center,
