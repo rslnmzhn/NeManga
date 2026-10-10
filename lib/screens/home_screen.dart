@@ -38,6 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadData();
+    UpdateService.cleanOldInstallers();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkUpdate(silent: true);
     });
@@ -419,9 +420,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed == true) {
       await ArchiveService.clearCache();
+      await UpdateService.cleanOldInstallers();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Кэш страниц успешно очищен')),
+          const SnackBar(content: Text('Кэш страниц и старые обновления очищены')),
         );
       }
     }

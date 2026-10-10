@@ -246,4 +246,43 @@ class UpdateService {
     }
     return 'unsupported';
   }
+
+  /// Очистка старых установочных файлов APK (из временного кэша и старых версий из Загрузок)
+  static Future<void> cleanOldInstallers() async {
+    try {
+      // 1. Очищаем внутренний кэш обновлений
+      final tempDir = await getTemporaryDirectory();
+      final updateDir = Directory(p.join(tempDir.path, 'updates'));
+      if (await updateDir.exists()) {
+        await updateDir.delete(recursive: true);
+      }
+    } catch (e) {
+      debugPrint('Ошибка очистки кэша обновлений: $e');
+    }
+
+    try {
+      // 2. Очищаем старые файлы APK из папки Загрузки/NeManga,
+      // если приложение уже обновлено до этой или более новой версии
+      final publicDir = await CompressorService.getPublicMangaDirectory();
+      if (await publicDir.exists()) {
+        final current = await getCurrentVersion();
+        final entities = publicDir.listSync();
+        for (final entity in entities) {
+          if (entity is File && entity.path.toLowerCase().endsWith('.apk')) {
+            final fileName = p.basename(entity.path);
+            final match = RegExp(r'v?(\d+\.\d+\.\d+)').firstMatch(fileName);
+            if (match != null) {
+              final apkVer = match.group(1)!;
+              // Если текущая версия приложения новее или равна версии APK, удаляем старый установщик
+              if (!isNewerVersion(current, apkVer)) {
+                await CompressorService.deletePhysicalFile(entity.path);
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Ошибка очистки старых APK в Загрузках: $e');
+    }
+  }
 }
