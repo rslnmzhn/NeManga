@@ -59,14 +59,19 @@ class ArchiveService {
 
   /// Проверяет, является ли файл поддерживаемым изображением
   static bool isImageFile(String filename) {
-    final lower = filename.toLowerCase();
-    // Игнорируем метаданные macOS и скрытые системные файлы
-    if (lower.contains('__macosx') ||
+    final normalized = filename.replaceAll('\\', '/');
+    final lower = normalized.toLowerCase();
+    final baseName = p.basename(normalized);
+
+    // Игнорируем скрытые файлы (._*, .DS_Store), метаданные macOS, системные базы данных
+    if (baseName.startsWith('.') ||
+        lower.contains('__macosx') ||
         lower.contains('/.') ||
-        lower.startsWith('.') ||
         lower.endsWith('.db') ||
         lower.endsWith('.xml') ||
-        lower.endsWith('.txt')) {
+        lower.endsWith('.txt') ||
+        lower.endsWith('.json') ||
+        lower.endsWith('.nfo')) {
       return false;
     }
     final ext = p.extension(lower);
@@ -143,7 +148,8 @@ class ArchiveService {
     }
 
     final fileSize = await file.length();
-    final hash = getArchiveHash(archivePath, fileSize);
+    final lastModified = (await file.lastModified()).millisecondsSinceEpoch;
+    final hash = getArchiveHash('$archivePath:$lastModified', fileSize);
     final tempDir = await getTemporaryDirectory();
     final mangaCacheDir = Directory(p.join(tempDir.path, 'nemanga_cache', hash));
 
@@ -154,7 +160,10 @@ class ArchiveService {
     if (await mangaCacheDir.exists()) {
       final cachedFiles = await mangaCacheDir
           .list()
-          .where((entity) => entity is File && isImageFile(entity.path))
+          .where((entity) =>
+              entity is File &&
+              isImageFile(entity.path) &&
+              entity.lengthSync() > 0)
           .map((entity) => entity.path)
           .toList();
 
@@ -171,12 +180,23 @@ class ArchiveService {
           archivePath: archivePath,
           title: title,
           pagePaths: cachedFiles,
-          coverPath: (await File(persistentCoverPath).exists()) ? persistentCoverPath : cachedFiles.first,
+          coverPath: (await File(persistentCoverPath).exists())
+              ? persistentCoverPath
+              : cachedFiles.first,
         );
+      } else {
+        try {
+          await mangaCacheDir.delete(recursive: true);
+        } catch (_) {}
       }
     }
 
-    // Создаем директорию кэша
+    // Очищаем директорию перед распаковкой, чтобы не оставалось старых или лишних файлов
+    if (await mangaCacheDir.exists()) {
+      try {
+        await mangaCacheDir.delete(recursive: true);
+      } catch (_) {}
+    }
     await mangaCacheDir.create(recursive: true);
 
     // Распаковываем в фоновом изоляте
@@ -210,12 +230,15 @@ class ArchiveService {
     final inputStream = InputFileStream(archivePath);
     final archive = ZipDecoder().decodeStream(inputStream);
 
-    // Фильтруем только изображения
+    // Фильтруем только изображения, исключая папки и пустые файлы
     final imageEntries = archive.where((file) {
-      if (file.isFile && isImageFile(file.name)) {
-        return true;
-      }
-      return false;
+      if (!file.isFile) return false;
+      if (file.size <= 0) return false;
+      final norm = file.name.replaceAll('\\', '/');
+      if (norm.endsWith('/')) return false;
+      final bName = p.basename(norm);
+      if (bName.startsWith('.')) return false;
+      return isImageFile(file.name);
     }).toList();
 
     // Сортируем страницы по естественному порядку
@@ -224,13 +247,15 @@ class ArchiveService {
     final resultPaths = <String>[];
     for (int i = 0; i < imageEntries.length; i++) {
       final entry = imageEntries[i];
+      final content = entry.content as List<int>;
+      if (content.isEmpty) continue;
+
       final ext = p.extension(entry.name);
       final paddedIndex = i.toString().padLeft(4, '0');
       final outputName = 'page_$paddedIndex$ext';
       final outputPath = p.join(destDirPath, outputName);
 
       final outputFile = File(outputPath);
-      final content = entry.content as List<int>;
       outputFile.writeAsBytesSync(content, flush: true);
       resultPaths.add(outputPath);
     }

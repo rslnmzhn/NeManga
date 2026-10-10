@@ -32,18 +32,33 @@ class _EditBookDialogState extends State<EditBookDialog> {
   final TextEditingController _tagInputController = TextEditingController();
   late List<String> _tags;
   late ReadingStatus _status;
+  List<String> _libraryTags = [];
 
-  static const List<String> _suggestedTags = [
-    'Любимое',
-    'В процессе',
-    'Прочитано',
+  static const List<String> _genrePresets = [
     'Сёнэн',
     'Сэйнэн',
+    'Сёдзё',
+    'Романтика',
     'Комедия',
     'Экшен',
     'Фэнтези',
     'Драма',
-    'Романтика',
+    'Исекай',
+    'Повседневность',
+    'Мистика',
+    'Хоррор',
+    'Детектив',
+    'Психология',
+    'Триллер',
+    'Научная фантастика',
+    'Приключения',
+    'Меха',
+    'Сверхъестественное',
+    'Боевик',
+    'Этти',
+    'Киберпанк',
+    'Школа',
+    'Спорт',
   ];
 
   @override
@@ -52,6 +67,16 @@ class _EditBookDialogState extends State<EditBookDialog> {
     _titleController = TextEditingController(text: widget.book.title);
     _tags = List.from(widget.book.tags);
     _status = widget.book.status;
+    _loadLibraryTags();
+  }
+
+  Future<void> _loadLibraryTags() async {
+    final tags = await StorageService.getAllTags();
+    if (mounted) {
+      setState(() {
+        _libraryTags = tags;
+      });
+    }
   }
 
   @override
@@ -96,6 +121,11 @@ class _EditBookDialogState extends State<EditBookDialog> {
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
 
+    // Теги, которые уже есть в других книгах библиотеки, но еще не добавлены в эту
+    final availableLibraryTags = _libraryTags.where((t) => !_tags.contains(t)).toList();
+    // Популярные жанры манги, которых еще нет ни в этой книге, ни среди тегов библиотеки
+    final availableGenrePresets = _genrePresets.where((g) => !_tags.contains(g) && !_libraryTags.contains(g)).toList();
+
     return AlertDialog(
       backgroundColor: const Color(0xFF1B1E26),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -131,28 +161,30 @@ class _EditBookDialogState extends State<EditBookDialog> {
 
             // Статус чтения
             const Text(
-              'Статус прочтения',
+              'Статус чтения',
               style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                _buildStatusChip(ReadingStatus.reading, 'Читаю', primary),
-                _buildStatusChip(ReadingStatus.planned, 'В планах', Colors.amber),
-                _buildStatusChip(ReadingStatus.completed, 'Прочитано', Colors.greenAccent),
-                _buildStatusChip(ReadingStatus.none, 'Без статуса', Colors.grey),
-              ],
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildStatusChip(ReadingStatus.reading, 'Читаю', primary),
+                  const SizedBox(width: 8),
+                  _buildStatusChip(ReadingStatus.planned, 'В планах', Colors.amber),
+                  const SizedBox(width: 8),
+                  _buildStatusChip(ReadingStatus.completed, 'Прочитано', Colors.greenAccent),
+                ],
+              ),
             ),
             const SizedBox(height: 16),
 
-            // Теги
+            // Теги и жанры
             const Text(
-              'Теги',
+              'Теги и жанры',
               style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
@@ -160,7 +192,7 @@ class _EditBookDialogState extends State<EditBookDialog> {
                     controller: _tagInputController,
                     onSubmitted: _addTag,
                     decoration: InputDecoration(
-                      hintText: 'Добавить тег...',
+                      hintText: 'Добавить свой тег...',
                       filled: true,
                       fillColor: const Color(0xFF242833),
                       border: OutlineInputBorder(
@@ -182,10 +214,10 @@ class _EditBookDialogState extends State<EditBookDialog> {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
 
-            // Выбранные теги
-            if (_tags.isNotEmpty)
+            // Выбранные теги этой манги
+            if (_tags.isNotEmpty) ...[
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
@@ -194,7 +226,7 @@ class _EditBookDialogState extends State<EditBookDialog> {
                     backgroundColor: primary.withValues(alpha: 0.2),
                     side: BorderSide(color: primary.withValues(alpha: 0.4)),
                     label: Text(
-                      tag,
+                      '#$tag',
                       style: TextStyle(color: primary, fontSize: 12, fontWeight: FontWeight.bold),
                     ),
                     deleteIcon: Icon(Icons.close, size: 14, color: primary),
@@ -202,28 +234,51 @@ class _EditBookDialogState extends State<EditBookDialog> {
                   );
                 }).toList(),
               ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
+            ],
 
-            // Подсказки популярных тегов
-            const Text(
-              'Быстрые теги:',
-              style: TextStyle(fontSize: 12, color: Colors.white54),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: _suggestedTags
-                  .where((st) => !_tags.contains(st))
-                  .map((st) {
-                return ActionChip(
-                  label: Text(st, style: const TextStyle(fontSize: 11)),
-                  backgroundColor: Colors.white.withValues(alpha: 0.06),
-                  side: BorderSide.none,
-                  onPressed: () => _addTag(st),
-                );
-              }).toList(),
-            ),
+            // 1. Теги, уже добавленные в библиотеку
+            if (availableLibraryTags.isNotEmpty) ...[
+              const Text(
+                'Уже добавленные в библиотеку:',
+                style: TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: availableLibraryTags.map((tag) {
+                  return ActionChip(
+                    label: Text('#$tag', style: const TextStyle(fontSize: 11)),
+                    backgroundColor: Colors.amber.withValues(alpha: 0.12),
+                    side: BorderSide(color: Colors.amber.withValues(alpha: 0.3)),
+                    onPressed: () => _addTag(tag),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // 2. Популярные жанры манги
+            if (availableGenrePresets.isNotEmpty) ...[
+              const Text(
+                'Жанры манги:',
+                style: TextStyle(fontSize: 12, color: Colors.white54, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: availableGenrePresets.map((genre) {
+                  return ActionChip(
+                    label: Text(genre, style: const TextStyle(fontSize: 11)),
+                    backgroundColor: Colors.white.withValues(alpha: 0.06),
+                    side: BorderSide.none,
+                    onPressed: () => _addTag(genre),
+                  );
+                }).toList(),
+              ),
+            ],
           ],
         ),
       ),
@@ -248,20 +303,20 @@ class _EditBookDialogState extends State<EditBookDialog> {
   Widget _buildStatusChip(ReadingStatus status, String label, Color color) {
     final isSelected = _status == status;
     return ChoiceChip(
-      selected: isSelected,
       label: Text(label),
+      selected: isSelected,
       selectedColor: color.withValues(alpha: 0.25),
+      backgroundColor: const Color(0xFF242833),
       labelStyle: TextStyle(
-        color: isSelected ? color : Colors.white70,
+        color: isSelected ? color : Colors.grey,
         fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
         fontSize: 12,
       ),
       side: BorderSide(
-        color: isSelected ? color : Colors.white12,
-        width: isSelected ? 1.5 : 1,
+        color: isSelected ? color : Colors.transparent,
       ),
-      onSelected: (val) {
-        if (val) {
+      onSelected: (selected) {
+        if (selected) {
           setState(() {
             _status = status;
           });

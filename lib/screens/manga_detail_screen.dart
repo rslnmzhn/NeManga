@@ -485,7 +485,45 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Теги
+                      // Теги и жанры
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Жанры и теги',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white70,
+                            ),
+                          ),
+                          TextButton.icon(
+                            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                            icon: const Icon(Icons.label_outline_rounded, size: 16),
+                            label: Text(
+                              _manga.tags.isEmpty ? 'Добавить' : 'Изменить',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            onPressed: () {
+                              EditBookDialog.show(
+                                context,
+                                book: BookMetadata(
+                                  filePath: _manga.id,
+                                  title: _manga.title,
+                                  totalPages: _manga.totalPages,
+                                  lastPage: 0,
+                                  lastReadTime: _manga.updatedAt,
+                                  fileSize: _manga.totalSize,
+                                  tags: _manga.tags,
+                                  coverPath: _manga.coverPath,
+                                  status: _manga.status,
+                                ),
+                                onSaved: _refresh,
+                              );
+                            },
+                          ),
+                        ],
+                      ),
                       if (_manga.tags.isNotEmpty) ...[
                         Wrap(
                           spacing: 6,
@@ -497,12 +535,18 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                               padding: const EdgeInsets.symmetric(horizontal: 6),
                               label: Text(
                                 '#$tag',
-                                style: TextStyle(color: primary, fontSize: 11, fontWeight: FontWeight.bold),
+                                style: TextStyle(
+                                  color: primary,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             );
                           }).toList(),
                         ),
                         const SizedBox(height: 14),
+                      ] else ...[
+                        const SizedBox(height: 8),
                       ],
 
                       // Кнопка "Продолжить чтение"

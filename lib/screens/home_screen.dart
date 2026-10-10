@@ -507,6 +507,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F1115),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: primary,
+        foregroundColor: Colors.white,
+        elevation: 6,
+        shape: const CircleBorder(),
+        tooltip: 'Добавить архивы манги',
+        onPressed: _pickAndOpenArchives,
+        child: const Icon(Icons.add_rounded, size: 36),
+      ),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1115),
         elevation: 0,
@@ -569,10 +579,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Карточка добавления манги
-                        _buildOpenArchiveCard(primary),
-                        const SizedBox(height: 14),
-
                         // Поиск
                         if (_allGroups.isNotEmpty) ...[
                           _buildSearchBar(),
@@ -638,7 +644,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
-                const SliverToBoxAdapter(child: SizedBox(height: 40)),
+                const SliverToBoxAdapter(child: SizedBox(height: 80)),
               ],
             ),
           ),
@@ -763,13 +769,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildTagsFilterRow(Color primary) {
     return SizedBox(
-      height: 32,
+      height: 34,
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: [
           ChoiceChip(
             label: const Text('Все теги'),
             selected: _selectedTag == null,
+            selectedColor: primary.withValues(alpha: 0.25),
+            backgroundColor: const Color(0xFF1E222A),
+            labelStyle: TextStyle(
+              fontSize: 12,
+              color: _selectedTag == null ? primary : Colors.white70,
+              fontWeight: _selectedTag == null ? FontWeight.bold : FontWeight.normal,
+            ),
+            side: BorderSide(color: _selectedTag == null ? primary : Colors.white12),
             onSelected: (selected) {
               if (selected) {
                 setState(() {
@@ -787,6 +801,14 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ChoiceChip(
                 label: Text('#$tag'),
                 selected: isSelected,
+                selectedColor: primary.withValues(alpha: 0.25),
+                backgroundColor: const Color(0xFF1E222A),
+                labelStyle: TextStyle(
+                  fontSize: 12,
+                  color: isSelected ? primary : Colors.white70,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                ),
+                side: BorderSide(color: isSelected ? primary : Colors.white12),
                 onSelected: (selected) {
                   setState(() {
                     _selectedTag = selected ? tag : null;
@@ -797,92 +819,6 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           }),
         ],
-      ),
-    );
-  }
-
-  Widget _buildOpenArchiveCard(Color primary) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            primary.withValues(alpha: 0.25),
-            const Color(0xFF1E232D),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: primary.withValues(alpha: 0.3), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: primary.withValues(alpha: 0.12),
-            blurRadius: 18,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: _pickAndOpenArchives,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: primary,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: primary.withValues(alpha: 0.4),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.folder_zip_outlined,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Открыть архив(ы) манги',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        'Поддерживается выбор нескольких глав сразу',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  Icons.add_circle_outline,
-                  color: Colors.white.withValues(alpha: 0.8),
-                  size: 24,
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -916,7 +852,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Text(
             _searchQuery.isNotEmpty || _selectedTag != null || _selectedStatus != null
                 ? 'По вашему запросу ничего не найдено.'
-                : 'Нажмите кнопку выше, чтобы открыть первый zip/cbz архив с главами.',
+                : 'Нажмите «+» внизу по центру, чтобы добавить первые zip/cbz архивы манги.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 13,

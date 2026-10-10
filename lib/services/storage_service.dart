@@ -303,8 +303,31 @@ class StorageService {
     );
   }
 
+  /// Обновить теги манги по id группы
+  static Future<void> updateGroupTags(String groupId, List<String> tags) async {
+    final groups = await getMangaGroups();
+    final idx = groups.indexWhere((g) => g.id == groupId);
+    if (idx != -1) {
+      final updated = groups[idx].copyWith(tags: tags, updatedAt: DateTime.now());
+      await saveMangaGroup(updated);
+    }
+  }
+
   static Future<void> updateBook(BookMetadata updated) async {
-    await saveMangaGroup(updated.toMangaGroup());
+    final groups = await getMangaGroups();
+    final idx = groups.indexWhere((g) => g.id == updated.filePath);
+    if (idx != -1) {
+      final existing = groups[idx];
+      final updatedGroup = existing.copyWith(
+        title: updated.title,
+        tags: updated.tags,
+        status: updated.status,
+        updatedAt: DateTime.now(),
+      );
+      await saveMangaGroup(updatedGroup);
+    } else {
+      await saveMangaGroup(updated.toMangaGroup());
+    }
   }
 
   static Future<void> removeBook(String filePath) async {

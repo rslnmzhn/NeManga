@@ -72,6 +72,30 @@ class CompressorService {
     } catch (_) {}
   }
 
+  /// Надежное удаление физического файла (с нативным фоллбэком для Android)
+  static Future<bool> deletePhysicalFile(String path) async {
+    try {
+      final f = File(path);
+      if (await f.exists()) {
+        await f.delete();
+        await scanMediaFile(path);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('Ошибка удаления файла в Dart: $e');
+    }
+
+    try {
+      if (Platform.isAndroid) {
+        final res = await _channel.invokeMethod<bool>('deleteFile', {'path': path});
+        return res ?? false;
+      }
+    } catch (e) {
+      debugPrint('Ошибка удаления файла через нативный канал: $e');
+    }
+    return false;
+  }
+
   /// Сжать архив манги в высокоэффективный формат WebP
   static Future<CompressionResult> compressArchive({
     required String sourcePath,
@@ -158,9 +182,8 @@ class CompressorService {
     );
 
     // Только после обновления базы данных удаляем старый оригинальный файл (если путь отличается)
-    if (finalDestinationPath != sourcePath && deleteOriginal && await sourceFile.exists()) {
-      await sourceFile.delete();
-      await scanMediaFile(sourcePath);
+    if (finalDestinationPath != sourcePath && deleteOriginal) {
+      await deletePhysicalFile(sourcePath);
     }
 
     // Уведомляем систему для отображения в проводнике

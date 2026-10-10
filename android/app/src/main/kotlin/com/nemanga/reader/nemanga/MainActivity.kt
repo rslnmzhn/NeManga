@@ -134,6 +134,24 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(true)
                 }
+                "deleteFile" -> {
+                    val path = call.argument<String>("path")
+                    if (path == null) {
+                        result.success(false)
+                        return@setMethodCallHandler
+                    }
+                    var deleted = false
+                    try {
+                        val file = File(path)
+                        if (file.exists()) {
+                            deleted = file.delete()
+                        }
+                    } catch (_: Exception) {}
+                    if (deleted) {
+                        MediaScannerConnection.scanFile(this, arrayOf(path), null, null)
+                    }
+                    result.success(deleted)
+                }
                 "compressArchive" -> {
                     val sourcePath = call.argument<String>("sourcePath")
                     val targetPath = call.argument<String>("targetPath")
@@ -201,60 +219,67 @@ class MainActivity : FlutterActivity() {
             for (entry in entries) {
                 if (entry.isDirectory) continue
 
-                val isImage = isImageExtension(entry.name) && !entry.name.contains("__MACOSX")
+                val normalizedName = entry.name.replace('\\', '/')
+                val baseName = File(normalizedName).name
+
+                // Игнорируем метаданные macOS, скрытые файлы ._* и 0-байтные файлы
+                if (baseName.startsWith(".") || normalizedName.contains("__MACOSX") || entry.size == 0L) {
+                    continue
+                }
+
+                val isImage = isImageExtension(baseName)
 
                 if (isImage) {
-                    imageCount++
-                    zipFile.getInputStream(entry).use { inputStream ->
-                        val options = BitmapFactory.Options().apply {
-                            inPreferredConfig = Bitmap.Config.ARGB_8888
+                    val originalBitmap = try {
+                        zipFile.getInputStream(entry).use { inputStream ->
+                            val options = BitmapFactory.Options().apply {
+                                inPreferredConfig = Bitmap.Config.ARGB_8888
+                            }
+                            BitmapFactory.decodeStream(inputStream, null, options)
                         }
-                        val originalBitmap = BitmapFactory.decodeStream(inputStream, null, options)
+                    } catch (_: Exception) {
+                        null
+                    }
 
-                        if (originalBitmap != null) {
-                            val bitmapToCompress = if (originalBitmap.width > maxWidth) {
-                                val ratio = maxWidth.toFloat() / originalBitmap.width.toFloat()
-                                val targetHeight = (originalBitmap.height * ratio).toInt()
-                                Bitmap.createScaledBitmap(originalBitmap, maxWidth, targetHeight, true)
-                            } else {
-                                originalBitmap
-                            }
-
-                            val baos = ByteArrayOutputStream()
-                            bitmapToCompress.compress(format, quality, baos)
-                            val compressedBytes = baos.toByteArray()
-
-                            // Сохраняем имя с расширением .webp
-                            val dotIndex = entry.name.lastIndexOf('.')
-                            val baseName = if (dotIndex > 0) entry.name.substring(0, dotIndex) else entry.name
-                            val newEntryName = "$baseName.webp"
-
-                            val newEntry = ZipEntry(newEntryName)
-                            zos.putNextEntry(newEntry)
-                            zos.write(compressedBytes)
-                            zos.closeEntry()
-
-                            if (bitmapToCompress != originalBitmap) {
-                                bitmapToCompress.recycle()
-                            }
-                            originalBitmap.recycle()
+                    if (originalBitmap != null) {
+                        imageCount++
+                        val bitmapToCompress = if (originalBitmap.width > maxWidth) {
+                            val ratio = maxWidth.toFloat() / originalBitmap.width.toFloat()
+                            val targetHeight = (originalBitmap.height * ratio).toInt()
+                            Bitmap.createScaledBitmap(originalBitmap, maxWidth, targetHeight, true)
                         } else {
-                            // Если не удалось декодировать как Bitmap, копируем как есть
-                            zipFile.getInputStream(entry).use { rawStream ->
-                                val fallbackEntry = ZipEntry(entry.name)
-                                zos.putNextEntry(fallbackEntry)
-                                rawStream.copyTo(zos)
-                                zos.closeEntry()
-                            }
+                            originalBitmap
                         }
+
+                        val baos = ByteArrayOutputStream()
+                        bitmapToCompress.compress(format, quality, baos)
+                        val compressedBytes = baos.toByteArray()
+
+                        // Сохраняем имя с расширением .webp
+                        val dotIndex = baseName.lastIndexOf('.')
+                        val nameNoExt = if (dotIndex > 0) baseName.substring(0, dotIndex) else baseName
+                        val newEntryName = "$nameNoExt.webp"
+
+                        val newEntry = ZipEntry(newEntryName)
+                        zos.putNextEntry(newEntry)
+                        zos.write(compressedBytes)
+                        zos.closeEntry()
+
+                        if (bitmapToCompress != originalBitmap) {
+                            bitmapToCompress.recycle()
+                        }
+                        originalBitmap.recycle()
                     }
                 } else {
-                    // Текстовые файлы, оглавление и прочие метаданные переносим без изменений
-                    zipFile.getInputStream(entry).use { nonImageStream ->
-                        val plainEntry = ZipEntry(entry.name)
-                        zos.putNextEntry(plainEntry)
-                        nonImageStream.copyTo(zos)
-                        zos.closeEntry()
+                    // Текстовые файлы, ComicInfo.xml переносим только полезные данные
+                    val lower = baseName.lowercase()
+                    if (lower.endsWith(".xml") || lower.endsWith(".txt") || lower.endsWith(".json")) {
+                        zipFile.getInputStream(entry).use { nonImageStream ->
+                            val plainEntry = ZipEntry(baseName)
+                            zos.putNextEntry(plainEntry)
+                            nonImageStream.copyTo(zos)
+                            zos.closeEntry()
+                        }
                     }
                 }
             }
