@@ -100,12 +100,32 @@ class ImageDimensionHelper {
 }
 
 void main() {
-  test('Image dimension decoding test', () {
-    final iconSize = ImageDimensionHelper.getImageDimensions(
-      '/home/burmalda/Ruslan/NeManga/assets/icon/app_icon.png',
-    );
-    expect(iconSize, isNotNull);
-    expect(iconSize!.$1, 512);
-    expect(iconSize.$2, 512);
+  test('Image dimension decoding test with sample PNG and real asset', () {
+    // 1. Проверяем с ассетом репозитория
+    final file = File('assets/icon/app_icon.png');
+    if (file.existsSync()) {
+      final iconSize = ImageDimensionHelper.getImageDimensions(file.path);
+      expect(iconSize, isNotNull);
+      expect(iconSize!.$1, 512);
+      expect(iconSize.$2, 512);
+    }
+
+    // 2. Проверяем со сгенерированным в тесте PNG заголовком
+    final tempDir = Directory.systemTemp.createTempSync('dim_test');
+    final tempPng = File('${tempDir.path}/sample.png');
+    final header = Uint8List(24);
+    header.setRange(0, 8, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    // IHDR width = 800, height = 1200
+    final bd = ByteData.sublistView(header);
+    bd.setUint32(16, 800, Endian.big);
+    bd.setUint32(20, 1200, Endian.big);
+    tempPng.writeAsBytesSync(header);
+
+    final dims = ImageDimensionHelper.getImageDimensions(tempPng.path);
+    expect(dims, isNotNull);
+    expect(dims!.$1, 800);
+    expect(dims.$2, 1200);
+
+    tempDir.deleteSync(recursive: true);
   });
 }
