@@ -1,11 +1,106 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
 import '../services/storage_service.dart';
 import '../widgets/reader_settings_sheet.dart';
+
+class _ImageDimensionHelper {
+  static (int, int)? getImageDimensions(String filePath) {
+    try {
+      final file = File(filePath);
+      if (!file.existsSync()) return null;
+
+      final raf = file.openSync(mode: FileMode.read);
+      try {
+        final header = Uint8List(1024);
+        final bytesRead = raf.readIntoSync(header);
+        if (bytesRead < 16) return null;
+
+        // 1. PNG: 8 bytes signature, next chunk is IHDR
+        if (header[0] == 0x89 &&
+            header[1] == 0x50 &&
+            header[2] == 0x4E &&
+            header[3] == 0x47) {
+          if (bytesRead >= 24) {
+            final bd = ByteData.sublistView(header);
+            final w = bd.getUint32(16, Endian.big);
+            final h = bd.getUint32(20, Endian.big);
+            return (w, h);
+          }
+        }
+
+        // 2. WebP: RIFF....WEBP
+        if (header[0] == 0x52 &&
+            header[1] == 0x49 &&
+            header[2] == 0x46 &&
+            header[3] == 0x46 &&
+            header[8] == 0x57 &&
+            header[9] == 0x45 &&
+            header[10] == 0x42 &&
+            header[11] == 0x50) {
+          final chunk = String.fromCharCodes(header.sublist(12, 16));
+          final bd = ByteData.sublistView(header);
+          if (chunk == 'VP8 ') {
+            if (bytesRead >= 30) {
+              final w = bd.getUint16(26, Endian.little) & 0x3FFF;
+              final h = bd.getUint16(28, Endian.little) & 0x3FFF;
+              return (w, h);
+            }
+          } else if (chunk == 'VP8L') {
+            if (bytesRead >= 25) {
+              final val = bd.getUint32(21, Endian.little);
+              final w = 1 + (val & 0x3FFF);
+              final h = 1 + ((val >> 14) & 0x3FFF);
+              return (w, h);
+            }
+          } else if (chunk == 'VP8X') {
+            if (bytesRead >= 30) {
+              final w = 1 + (header[24] | (header[25] << 8) | (header[26] << 16));
+              final h = 1 + (header[27] | (header[28] << 8) | (header[29] << 16));
+              return (w, h);
+            }
+          }
+        }
+
+        // 3. JPEG: 0xFF, 0xD8
+        if (header[0] == 0xFF && header[1] == 0xD8) {
+          int offset = 2;
+          while (offset < bytesRead - 8) {
+            if (header[offset] != 0xFF) {
+              offset++;
+              continue;
+            }
+            final marker = header[offset + 1];
+            if (marker >= 0xC0 && marker <= 0xC2) {
+              final bd = ByteData.sublistView(header);
+              final h = bd.getUint16(offset + 5, Endian.big);
+              final w = bd.getUint16(offset + 7, Endian.big);
+              return (w, h);
+            }
+            final bd = ByteData.sublistView(header);
+            final length = bd.getUint16(offset + 2, Endian.big);
+            offset += 2 + length;
+          }
+        }
+
+        // 4. GIF
+        if (header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46) {
+          final bd = ByteData.sublistView(header);
+          final w = bd.getUint16(6, Endian.little);
+          final h = bd.getUint16(8, Endian.little);
+          return (w, h);
+        }
+      } finally {
+        raf.closeSync();
+      }
+    } catch (_) {}
+    return null;
+  }
+}
 
 class ReaderScreen extends StatefulWidget {
   final String title;
@@ -40,8 +135,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _showControls = true;
   Timer? _hideControlsTimer;
 
-  // Кэш высот страниц для точного расчета текущей страницы в режиме вебтун
+  // Кэш соотношений сторон (height / width) и высот страниц для режима вебтун
+  final Map<int, double> _pageRatios = {};
   final Map<int, double> _pageHeights = {};
+  double _lastCalculatedWidth = 0;
 
   @override
   void initState() {
@@ -49,6 +146,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _settings = widget.settings;
     _currentPage = widget.initialPage.clamp(0, widget.pagePaths.length - 1);
     _pageController = PageController(initialPage: _currentPage);
+
+    _initAspectRatios();
 
     // Скрываем системные бары через короткую паузу
     _scheduleHideControls();
@@ -61,6 +160,27 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
 
     _webtoonScrollController.addListener(_onWebtoonScroll);
+  }
+
+  void _initAspectRatios() {
+    for (int i = 0; i < widget.pagePaths.length; i++) {
+      final dims = _ImageDimensionHelper.getImageDimensions(widget.pagePaths[i]);
+      if (dims != null && dims.$1 > 0) {
+        _pageRatios[i] = dims.$2 / dims.$1; // height / width
+      } else {
+        _pageRatios[i] = 1.414;
+      }
+    }
+  }
+
+  void _calculateHeights(double width) {
+    if (width <= 0) return;
+    if (_lastCalculatedWidth == width && _pageHeights.length == widget.pagePaths.length) return;
+    _lastCalculatedWidth = width;
+    for (int i = 0; i < widget.pagePaths.length; i++) {
+      final ratio = _pageRatios[i] ?? 1.414;
+      _pageHeights[i] = width * ratio;
+    }
   }
 
   @override
@@ -78,13 +198,45 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (_settings.mode != ReaderMode.webtoon) return;
     if (!_webtoonScrollController.hasClients) return;
 
-    final offset = _webtoonScrollController.offset;
+    final position = _webtoonScrollController.position;
+    final offset = position.pixels;
+    final maxScroll = position.maxScrollExtent;
+    final pageCount = widget.pagePaths.length;
+    if (pageCount == 0) return;
+
+    // 1. В самом верху ленты
+    if (offset <= 10.0) {
+      if (_currentPage != 0) {
+        setState(() {
+          _currentPage = 0;
+        });
+        _saveCurrentProgress();
+      }
+      return;
+    }
+
+    // 2. В самом низу ленты: ВСЕГДА фиксируем последнюю страницу
+    if (offset >= maxScroll - 15.0 || position.extentAfter <= 15.0) {
+      final lastPage = pageCount - 1;
+      if (_currentPage != lastPage) {
+        setState(() {
+          _currentPage = lastPage;
+        });
+        _saveCurrentProgress();
+      }
+      return;
+    }
+
+    // 3. Вычисление текущей страницы по реальной накопленной высоте
+    final screenWidth = MediaQuery.of(context).size.width;
+    _calculateHeights(screenWidth);
+
     double accumulated = 0;
     int detectedPage = 0;
 
-    for (int i = 0; i < widget.pagePaths.length; i++) {
-      final height = _pageHeights[i] ?? MediaQuery.of(context).size.height;
-      if (offset < accumulated + (height * 0.7)) {
+    for (int i = 0; i < pageCount; i++) {
+      final height = _pageHeights[i] ?? (screenWidth * 1.414);
+      if (offset < accumulated + (height * 0.6)) {
         detectedPage = i;
         break;
       }
@@ -92,21 +244,44 @@ class _ReaderScreenState extends State<ReaderScreen> {
       detectedPage = i;
     }
 
+    detectedPage = detectedPage.clamp(0, pageCount - 1);
+
     if (detectedPage != _currentPage) {
       setState(() {
         _currentPage = detectedPage;
       });
+      _saveCurrentProgress();
     }
   }
 
   void _jumpToWebtoonPage(int page) {
     if (!_webtoonScrollController.hasClients) return;
-    double offset = 0;
-    for (int i = 0; i < page; i++) {
-      offset += (_pageHeights[i] ?? MediaQuery.of(context).size.height);
+    final pageCount = widget.pagePaths.length;
+    if (pageCount == 0) return;
+
+    final target = page.clamp(0, pageCount - 1);
+    final maxScroll = _webtoonScrollController.position.maxScrollExtent;
+
+    if (target == 0) {
+      _webtoonScrollController.jumpTo(0.0);
+      return;
     }
+
+    if (target == pageCount - 1) {
+      _webtoonScrollController.jumpTo(maxScroll);
+      return;
+    }
+
+    final screenWidth = MediaQuery.of(context).size.width;
+    _calculateHeights(screenWidth);
+
+    double offset = 0;
+    for (int i = 0; i < target; i++) {
+      offset += (_pageHeights[i] ?? (screenWidth * 1.414));
+    }
+
     _webtoonScrollController.jumpTo(
-      offset.clamp(0.0, _webtoonScrollController.position.maxScrollExtent),
+      offset.clamp(0.0, maxScroll),
     );
   }
 
@@ -452,29 +627,35 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _buildWebtoonView() {
-    return ListView.builder(
-      controller: _webtoonScrollController,
-      physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.zero,
-      itemCount: widget.pagePaths.length,
-      itemBuilder: (context, index) {
-        final filePath = widget.pagePaths[index];
-        return InteractiveViewer(
-          minScale: 1.0,
-          maxScale: 3.5,
-          panEnabled: true,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return Image.file(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final screenWidth = constraints.maxWidth;
+        _calculateHeights(screenWidth);
+
+        return ListView.builder(
+          controller: _webtoonScrollController,
+          physics: const BouncingScrollPhysics(),
+          padding: EdgeInsets.zero,
+          itemCount: widget.pagePaths.length,
+          itemBuilder: (context, index) {
+            final filePath = widget.pagePaths[index];
+            final ratio = _pageRatios[index] ?? 1.414;
+            final expectedHeight = screenWidth * ratio;
+
+            return InteractiveViewer(
+              minScale: 1.0,
+              maxScale: 3.5,
+              panEnabled: true,
+              child: Image.file(
                 File(filePath),
                 fit: _getImageFit(),
-                width: constraints.maxWidth,
+                width: screenWidth,
                 frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
                   return child;
                 },
                 errorBuilder: (context, error, stackTrace) {
                   return Container(
-                    height: 250,
+                    height: expectedHeight > 0 ? expectedHeight : 250,
                     color: Colors.grey[900],
                     child: Center(
                       child: Text(
@@ -484,9 +665,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     ),
                   );
                 },
-              );
-            },
-          ),
+              ),
+            );
+          },
         );
       },
     );
