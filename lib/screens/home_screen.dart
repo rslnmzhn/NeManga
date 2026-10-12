@@ -170,6 +170,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (choice == null) return;
 
+    if (choice.deleteOriginal && !await CompressorService.hasAllFilesAccess()) {
+      await CompressorService.requestAllFilesAccess();
+    }
+
     setState(() {
       _isLoading = true;
       _loadingMessage = choice.shouldCompress ? 'Сжатие архивов в WebP...' : 'Подготовка файлов...';

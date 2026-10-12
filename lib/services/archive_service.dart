@@ -123,18 +123,22 @@ class ArchiveService {
     final destCoverPath = args['destCoverPath'] as String;
 
     final inputStream = InputFileStream(archivePath);
-    final archive = ZipDecoder().decodeStream(inputStream);
+    try {
+      final archive = ZipDecoder().decodeStream(inputStream);
 
-    final imageEntries = archive.where((f) => f.isFile && isImageFile(f.name)).toList();
-    if (imageEntries.isEmpty) return null;
+      final imageEntries = archive.where((f) => f.isFile && isImageFile(f.name)).toList();
+      if (imageEntries.isEmpty) return null;
 
-    imageEntries.sort((a, b) => naturalCompare(a.name, b.name));
-    final firstEntry = imageEntries.first;
+      imageEntries.sort((a, b) => naturalCompare(a.name, b.name));
+      final firstEntry = imageEntries.first;
 
-    final outFile = File(destCoverPath);
-    final content = firstEntry.content as List<int>;
-    outFile.writeAsBytesSync(content, flush: true);
-    return destCoverPath;
+      final outFile = File(destCoverPath);
+      final content = firstEntry.content as List<int>;
+      outFile.writeAsBytesSync(content, flush: true);
+      return destCoverPath;
+    } finally {
+      inputStream.close();
+    }
   }
 
   /// Распаковать и подготовить страницы манги
@@ -228,39 +232,43 @@ class ArchiveService {
     final destDirPath = args['destDirPath'] as String;
 
     final inputStream = InputFileStream(archivePath);
-    final archive = ZipDecoder().decodeStream(inputStream);
+    try {
+      final archive = ZipDecoder().decodeStream(inputStream);
 
-    // Фильтруем только изображения, исключая папки и пустые файлы
-    final imageEntries = archive.where((file) {
-      if (!file.isFile) return false;
-      if (file.size <= 0) return false;
-      final norm = file.name.replaceAll('\\', '/');
-      if (norm.endsWith('/')) return false;
-      final bName = p.basename(norm);
-      if (bName.startsWith('.')) return false;
-      return isImageFile(file.name);
-    }).toList();
+      // Фильтруем только изображения, исключая папки и пустые файлы
+      final imageEntries = archive.where((file) {
+        if (!file.isFile) return false;
+        if (file.size <= 0) return false;
+        final norm = file.name.replaceAll('\\', '/');
+        if (norm.endsWith('/')) return false;
+        final bName = p.basename(norm);
+        if (bName.startsWith('.')) return false;
+        return isImageFile(file.name);
+      }).toList();
 
-    // Сортируем страницы по естественному порядку
-    imageEntries.sort((a, b) => naturalCompare(a.name, b.name));
+      // Сортируем страницы по естественному порядку
+      imageEntries.sort((a, b) => naturalCompare(a.name, b.name));
 
-    final resultPaths = <String>[];
-    for (int i = 0; i < imageEntries.length; i++) {
-      final entry = imageEntries[i];
-      final content = entry.content as List<int>;
-      if (content.isEmpty) continue;
+      final resultPaths = <String>[];
+      for (int i = 0; i < imageEntries.length; i++) {
+        final entry = imageEntries[i];
+        final content = entry.content as List<int>;
+        if (content.isEmpty) continue;
 
-      final ext = p.extension(entry.name);
-      final paddedIndex = i.toString().padLeft(4, '0');
-      final outputName = 'page_$paddedIndex$ext';
-      final outputPath = p.join(destDirPath, outputName);
+        final ext = p.extension(entry.name);
+        final paddedIndex = i.toString().padLeft(4, '0');
+        final outputName = 'page_$paddedIndex$ext';
+        final outputPath = p.join(destDirPath, outputName);
 
-      final outputFile = File(outputPath);
-      outputFile.writeAsBytesSync(content, flush: true);
-      resultPaths.add(outputPath);
+        final outputFile = File(outputPath);
+        outputFile.writeAsBytesSync(content, flush: true);
+        resultPaths.add(outputPath);
+      }
+
+      return resultPaths;
+    } finally {
+      inputStream.close();
     }
-
-    return resultPaths;
   }
 
   /// Очистка старого кэша страниц

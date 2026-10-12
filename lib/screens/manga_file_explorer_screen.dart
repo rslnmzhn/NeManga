@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
+import '../services/compressor_service.dart';
 
 enum ExplorerViewMode {
   grid,
@@ -167,9 +168,10 @@ class MangaFileExplorerScreen extends StatefulWidget {
   State<MangaFileExplorerScreen> createState() => _MangaFileExplorerScreenState();
 }
 
-class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
+class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with WidgetsBindingObserver {
   late Directory _currentDirectory;
   bool _isLoading = true;
+  bool _hasStorageAccess = true;
 
   List<Directory> _subDirectories = [];
   List<File> _mangaFiles = [];
@@ -189,13 +191,37 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
   @override
   void initState() {
     super.initState();
-    _initStartDirectory();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPermissionAndInit();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermissionAndInit();
+    }
+  }
+
+  Future<void> _checkPermissionAndInit() async {
+    final hasAccess = await CompressorService.hasAllFilesAccess();
+    if (!mounted) return;
+    setState(() {
+      _hasStorageAccess = hasAccess;
+    });
+
+    if (!hasAccess) {
+      // Предлагаем пользователю открыть системное окно разрешений
+      await CompressorService.requestAllFilesAccess();
+    }
+
+    await _initStartDirectory();
   }
 
   Future<void> _initStartDirectory() async {
@@ -215,8 +241,8 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
       if (Platform.isAndroid) {
         final downloadDir = Directory('/storage/emulated/0/Download');
         if (await downloadDir.exists()) return downloadDir;
-        final extDir = await getExternalStorageDirectory();
-        if (extDir != null && await extDir.exists()) return extDir;
+        final rootDir = Directory('/storage/emulated/0');
+        if (await rootDir.exists()) return rootDir;
       }
     } catch (_) {}
     return getApplicationDocumentsDirectory();
@@ -245,6 +271,12 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
               files.add(entity);
             }
           }
+        }
+      } else {
+        final fallback = Directory('/storage/emulated/0/Download');
+        if (await fallback.exists()) {
+          _currentDirectory = fallback;
+          return _loadDirectoryContents();
         }
       }
     } catch (e) {
@@ -304,7 +336,9 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
 
   bool _canNavigateUp() {
     final parent = _currentDirectory.parent;
-    return parent.path != _currentDirectory.path;
+    if (parent.path == _currentDirectory.path) return false;
+    if (_currentDirectory.path == '/storage/emulated/0' || _currentDirectory.path == '/') return false;
+    return true;
   }
 
   void _toggleSelect(String path) {
@@ -483,6 +517,8 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
           : null,
       body: Column(
         children: [
+          if (!_hasStorageAccess) _buildPermissionBanner(primary),
+
           // 1. Хлебные крошки и панель навигации по папкам
           _buildNavigationBreadcrumbs(primary),
 
@@ -604,8 +640,65 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
     );
   }
 
+  Widget _buildPermissionBanner(Color primary) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.folder_special_rounded, color: Colors.amber, size: 24),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Доступ к хранилищу ограничен',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.amber,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Чтобы открывать папку «Загрузки» смартфона, просматривать архивы и удалять оригиналы после сжатия, Android требует системное разрешение «Доступ ко всем файлам».',
+            style: TextStyle(fontSize: 12, color: Colors.white70),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: const Icon(Icons.settings_suggest_rounded, size: 18),
+              label: const Text('Разрешить доступ ко всем файлам'),
+              onPressed: () async {
+                await CompressorService.requestAllFilesAccess();
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildNavigationBreadcrumbs(Color primary) {
     final parts = _currentDirectory.path.split('/').where((s) => s.isNotEmpty).toList();
+    final isInsideSandbox = _currentDirectory.path.contains('/data/user/0') ||
+        _currentDirectory.path.contains('/app_flutter') ||
+        _currentDirectory.path.contains('/Android/data');
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -650,6 +743,25 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
               ),
             ),
           ),
+          if (isInsideSandbox)
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: ActionChip(
+                visualDensity: VisualDensity.compact,
+                avatar: const Icon(Icons.download_rounded, size: 14, color: Colors.amber),
+                label: const Text('В Загрузки', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
+                backgroundColor: Colors.amber.withValues(alpha: 0.15),
+                side: const BorderSide(color: Colors.amber),
+                onPressed: () async {
+                  final d = Directory('/storage/emulated/0/Download');
+                  if (await d.exists()) {
+                    _navigateTo(d);
+                  } else {
+                    await CompressorService.requestAllFilesAccess();
+                  }
+                },
+              ),
+            ),
         ],
       ),
     );
@@ -687,14 +799,18 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> {
         fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
       ),
       side: BorderSide(color: isCurrent ? primary : Colors.white12),
-      onSelected: (_) {
+      onSelected: (_) async {
         final d = Directory(path);
-        if (d.existsSync()) {
+        if (await d.exists()) {
           _navigateTo(d);
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Папка не существует: $path')),
-          );
+          if (!_hasStorageAccess) {
+            await CompressorService.requestAllFilesAccess();
+          } else if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Папка не существует или недоступна: $path')),
+            );
+          }
         }
       },
     );

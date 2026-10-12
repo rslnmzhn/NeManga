@@ -90,6 +90,10 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
 
         if (choice == null) return;
 
+        if (choice.deleteOriginal && !await CompressorService.hasAllFilesAccess()) {
+          await CompressorService.requestAllFilesAccess();
+        }
+
         setState(() {
           _isLoading = true;
           _loadingMessage = choice.shouldCompress ? 'Сжатие глав в WebP...' : 'Добавление глав...';

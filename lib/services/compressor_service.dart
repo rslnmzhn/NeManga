@@ -63,6 +63,28 @@ class CompressorService {
     return fallback;
   }
 
+  /// Проверить наличие разрешения на доступ ко всем файлам (MANAGE_EXTERNAL_STORAGE)
+  static Future<bool> hasAllFilesAccess() async {
+    try {
+      if (Platform.isAndroid) {
+        final res = await _channel.invokeMethod<bool>('hasAllFilesAccess');
+        return res ?? true;
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  /// Запросить у пользователя системное разрешение на доступ ко всем файлам
+  static Future<bool> requestAllFilesAccess() async {
+    try {
+      if (Platform.isAndroid) {
+        final res = await _channel.invokeMethod<bool>('requestAllFilesAccess');
+        return res ?? false;
+      }
+    } catch (_) {}
+    return false;
+  }
+
   /// Уведомить Android MediaScanner о новом файле
   static Future<void> scanMediaFile(String path) async {
     try {
