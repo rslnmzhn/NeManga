@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import '../models/reader_models.dart';
@@ -8,6 +7,7 @@ import '../services/compressor_service.dart';
 import '../services/storage_service.dart';
 import '../widgets/compress_dialog.dart';
 import '../widgets/edit_book_dialog.dart';
+import 'manga_file_explorer_screen.dart';
 import 'reader_screen.dart';
 
 class MangaDetailScreen extends StatefulWidget {
@@ -72,22 +72,19 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
 
   Future<void> _addChapters() async {
     try {
-      final files = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['zip', 'cbz'],
-        dialogTitle: 'Выберите архивы глав (.zip или .cbz)',
+      final selectedPaths = await MangaFileExplorerScreen.pickMangaArchives(
+        context,
+        settings: widget.settings,
+        title: 'Добавить главы (${_manga.title})',
       );
 
-      if (files.isNotEmpty) {
-        final validPaths = files.map((f) => f.path).whereType<String>().toList();
-        if (validPaths.isEmpty) return;
-
+      if (selectedPaths != null && selectedPaths.isNotEmpty) {
         if (!mounted) return;
 
         // Предлагаем сжатие добавленных глав с опцией удаления оригиналов
         final choice = await PromptCompressAddedDialog.show(
           context,
-          filePaths: validPaths,
+          filePaths: selectedPaths,
           title: 'Сжать добавленные главы?',
         );
 
@@ -103,12 +100,12 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
         int totalCompressed = 0;
 
         if (choice.shouldCompress) {
-          for (int i = 0; i < validPaths.length; i++) {
+          for (int i = 0; i < selectedPaths.length; i++) {
             if (!mounted) break;
-            final path = validPaths[i];
+            final path = selectedPaths[i];
             final title = p.basenameWithoutExtension(path);
             setState(() {
-              _loadingMessage = 'Сжатие ${i + 1} из ${validPaths.length}: $title...';
+              _loadingMessage = 'Сжатие ${i + 1} из ${selectedPaths.length}: $title...';
             });
 
             try {
@@ -141,7 +138,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
             );
           }
         } else {
-          processedPaths.addAll(validPaths);
+          processedPaths.addAll(selectedPaths);
         }
 
         final newChapters = <ChapterItem>[];

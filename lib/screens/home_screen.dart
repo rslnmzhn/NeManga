@@ -11,6 +11,7 @@ import '../widgets/compress_dialog.dart';
 import '../widgets/edit_book_dialog.dart';
 import '../widgets/update_dialog.dart';
 import 'manga_detail_screen.dart';
+import 'manga_file_explorer_screen.dart';
 import 'reader_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -135,39 +136,28 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _pickAndOpenArchives() async {
     try {
-      final files = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['zip', 'cbz'],
-        dialogTitle: 'Выберите архивы манги (.zip или .cbz)',
+      final selectedPaths = await MangaFileExplorerScreen.pickMangaArchives(
+        context,
+        settings: _settings,
+        title: 'Добавить мангу',
       );
 
-      if (files.isNotEmpty) {
-        await _processPickedArchives(files);
+      if (selectedPaths != null && selectedPaths.isNotEmpty) {
+        await _processPickedArchives(selectedPaths);
       }
     } catch (e) {
-      try {
-        final fallbackFiles = await FilePicker.pickFiles(
-          type: FileType.any,
-          dialogTitle: 'Выберите архивы манги (.zip или .cbz)',
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка выбора файлов: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
         );
-        if (fallbackFiles.isNotEmpty) {
-          await _processPickedArchives(fallbackFiles);
-        }
-      } catch (fallbackError) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Ошибка выбора файлов: $fallbackError'),
-              backgroundColor: Colors.redAccent,
-            ),
-          );
-        }
       }
     }
   }
 
-  Future<void> _processPickedArchives(List<PlatformFile> files) async {
-    final validPaths = files.map((f) => f.path).whereType<String>().toList();
+  Future<void> _processPickedArchives(List<String> validPaths) async {
     if (validPaths.isEmpty) return;
 
     if (!mounted) return;
