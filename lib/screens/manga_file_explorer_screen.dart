@@ -216,11 +216,6 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
       _hasStorageAccess = hasAccess;
     });
 
-    if (!hasAccess) {
-      // Предлагаем пользователю открыть системное окно разрешений
-      await CompressorService.requestAllFilesAccess();
-    }
-
     await _initStartDirectory();
   }
 
