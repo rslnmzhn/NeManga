@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/material.dart';
 
 /// Режим чтения
 enum ReaderMode {
@@ -25,6 +26,102 @@ enum ColorTheme {
   pureBlack, // AMOLED черный (для максимальной энергоэффективности)
   darkGrey,  // Темно-серый
   light,     // Светлый
+}
+
+/// Акцентный цвет интерфейса приложения
+enum AppAccentColor {
+  sakura,    // 0: 🌸 Сакура (#FF6B9D)
+  cyberpunk, // 1: 💜 Киберпанк (#A855F7)
+  mint,      // 2: 🍃 Неоновая мята (#10B981)
+  amber,     // 3: ☀️ Янтарь (#F59E0B)
+  blue,      // 4: ⚡ Электрик блю (#3B82F6)
+}
+
+extension AppAccentColorExt on AppAccentColor {
+  Color get color {
+    switch (this) {
+      case AppAccentColor.sakura:
+        return const Color(0xFFFF6B9D);
+      case AppAccentColor.cyberpunk:
+        return const Color(0xFFA855F7);
+      case AppAccentColor.mint:
+        return const Color(0xFF10B981);
+      case AppAccentColor.amber:
+        return const Color(0xFFF59E0B);
+      case AppAccentColor.blue:
+        return const Color(0xFF3B82F6);
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case AppAccentColor.sakura:
+        return '🌸 Сакура';
+      case AppAccentColor.cyberpunk:
+        return '💜 Киберпанк';
+      case AppAccentColor.mint:
+        return '🍃 Мята';
+      case AppAccentColor.amber:
+        return '☀️ Янтарь';
+      case AppAccentColor.blue:
+        return '⚡ Электрик блю';
+    }
+  }
+}
+
+/// Тема оформления фона приложения
+enum AppThemeMode {
+  darkSlate, // Тёмный графит (#0F1115)
+  amoled,    // Настоящий глубокий AMOLED (#000000)
+}
+
+extension AppThemeModeExt on AppThemeMode {
+  Color get backgroundColor {
+    switch (this) {
+      case AppThemeMode.darkSlate:
+        return const Color(0xFF0F1115);
+      case AppThemeMode.amoled:
+        return const Color(0xFF000000);
+    }
+  }
+
+  Color get cardColor {
+    switch (this) {
+      case AppThemeMode.darkSlate:
+        return const Color(0xFF161920);
+      case AppThemeMode.amoled:
+        return const Color(0xFF080808);
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case AppThemeMode.darkSlate:
+        return 'Тёмный графит';
+      case AppThemeMode.amoled:
+        return 'True AMOLED (#000000)';
+    }
+  }
+}
+
+/// Порядок сортировки библиотечной манги
+enum LibrarySortOrder {
+  recent,   // По недавнему чтению
+  title,    // По алфавиту (А–Я)
+  progress, // По проценту прочтения
+}
+
+extension LibrarySortOrderExt on LibrarySortOrder {
+  String get label {
+    switch (this) {
+      case LibrarySortOrder.recent:
+        return 'Недавние';
+      case LibrarySortOrder.title:
+        return 'По названию (А–Я)';
+      case LibrarySortOrder.progress:
+        return 'По прогрессу';
+    }
+  }
 }
 
 /// Статус прочтения манги
@@ -58,6 +155,14 @@ class ReaderSettings {
   final ImageFit imageFit;
   final bool keepScreenOn;
   final ColorTheme colorTheme;
+  final bool volumeKeysNavigation;
+  final bool hapticFeedback;
+  final bool dualPage;
+  final double customBrightness; // 0.0 .. 0.8 затемнение
+  final bool warmFilter;         // тёплый ночной фильтр
+  final AppThemeMode appTheme;
+  final AppAccentColor accentColor;
+  final LibrarySortOrder sortOrder;
 
   const ReaderSettings({
     this.mode = ReaderMode.webtoon,
@@ -67,6 +172,14 @@ class ReaderSettings {
     this.imageFit = ImageFit.fitWidth,
     this.keepScreenOn = true,
     this.colorTheme = ColorTheme.pureBlack,
+    this.volumeKeysNavigation = true,
+    this.hapticFeedback = true,
+    this.dualPage = false,
+    this.customBrightness = 0.0,
+    this.warmFilter = false,
+    this.appTheme = AppThemeMode.darkSlate,
+    this.accentColor = AppAccentColor.amber,
+    this.sortOrder = LibrarySortOrder.recent,
   });
 
   ReaderSettings copyWith({
@@ -77,6 +190,14 @@ class ReaderSettings {
     ImageFit? imageFit,
     bool? keepScreenOn,
     ColorTheme? colorTheme,
+    bool? volumeKeysNavigation,
+    bool? hapticFeedback,
+    bool? dualPage,
+    double? customBrightness,
+    bool? warmFilter,
+    AppThemeMode? appTheme,
+    AppAccentColor? accentColor,
+    LibrarySortOrder? sortOrder,
   }) {
     return ReaderSettings(
       mode: mode ?? this.mode,
@@ -86,6 +207,14 @@ class ReaderSettings {
       imageFit: imageFit ?? this.imageFit,
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
       colorTheme: colorTheme ?? this.colorTheme,
+      volumeKeysNavigation: volumeKeysNavigation ?? this.volumeKeysNavigation,
+      hapticFeedback: hapticFeedback ?? this.hapticFeedback,
+      dualPage: dualPage ?? this.dualPage,
+      customBrightness: customBrightness ?? this.customBrightness,
+      warmFilter: warmFilter ?? this.warmFilter,
+      appTheme: appTheme ?? this.appTheme,
+      accentColor: accentColor ?? this.accentColor,
+      sortOrder: sortOrder ?? this.sortOrder,
     );
   }
 
@@ -98,18 +227,34 @@ class ReaderSettings {
       'imageFit': imageFit.index,
       'keepScreenOn': keepScreenOn,
       'colorTheme': colorTheme.index,
+      'volumeKeysNavigation': volumeKeysNavigation,
+      'hapticFeedback': hapticFeedback,
+      'dualPage': dualPage,
+      'customBrightness': customBrightness,
+      'warmFilter': warmFilter,
+      'appTheme': appTheme.index,
+      'accentColor': accentColor.index,
+      'sortOrder': sortOrder.index,
     };
   }
 
   factory ReaderSettings.fromMap(Map<String, dynamic> map) {
     return ReaderSettings(
-      mode: ReaderMode.values[map['mode'] ?? 0],
+      mode: ReaderMode.values[(map['mode'] ?? 0).clamp(0, ReaderMode.values.length - 1)],
       tapToNavigate: map['tapToNavigate'] ?? true,
       tapCenterForMenu: map['tapCenterForMenu'] ?? true,
       invertTap: map['invertTap'] ?? false,
-      imageFit: ImageFit.values[map['imageFit'] ?? 0],
+      imageFit: ImageFit.values[(map['imageFit'] ?? 0).clamp(0, ImageFit.values.length - 1)],
       keepScreenOn: map['keepScreenOn'] ?? true,
-      colorTheme: ColorTheme.values[map['colorTheme'] ?? 0],
+      colorTheme: ColorTheme.values[(map['colorTheme'] ?? 0).clamp(0, ColorTheme.values.length - 1)],
+      volumeKeysNavigation: map['volumeKeysNavigation'] ?? true,
+      hapticFeedback: map['hapticFeedback'] ?? true,
+      dualPage: map['dualPage'] ?? false,
+      customBrightness: (map['customBrightness'] as num?)?.toDouble() ?? 0.0,
+      warmFilter: map['warmFilter'] ?? false,
+      appTheme: AppThemeMode.values[(map['appTheme'] ?? 0).clamp(0, AppThemeMode.values.length - 1)],
+      accentColor: AppAccentColor.values[(map['accentColor'] ?? 3).clamp(0, AppAccentColor.values.length - 1)],
+      sortOrder: LibrarySortOrder.values[(map['sortOrder'] ?? 0).clamp(0, LibrarySortOrder.values.length - 1)],
     );
   }
 

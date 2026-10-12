@@ -273,13 +273,13 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
+    final primary = widget.settings.accentColor.color;
+    final bg = widget.settings.appTheme.backgroundColor;
     final statusColor = _getStatusColor(_manga.status, primary);
     final hasCover = _manga.coverPath != null && File(_manga.coverPath!).existsSync();
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F1115),
+      backgroundColor: bg,
       body: Stack(
         children: [
           CustomScrollView(

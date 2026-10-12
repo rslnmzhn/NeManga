@@ -196,6 +196,67 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                 _update(_current.copyWith(tapCenterForMenu: val));
               },
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Кнопки громкости'),
+              subtitle: const Text('Качелька громкости листает страницы / скроллит'),
+              value: _current.volumeKeysNavigation,
+              onChanged: (val) {
+                _update(_current.copyWith(volumeKeysNavigation: val));
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Тактильный виброотклик'),
+              subtitle: const Text('Мягкая вибрация при смене страниц и слайдере'),
+              value: _current.hapticFeedback,
+              onChanged: (val) {
+                _update(_current.copyWith(hapticFeedback: val));
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Двустраничный режим (альбом)'),
+              subtitle: const Text('Показ 2 страниц рядом в горизонтальной ориентации'),
+              value: _current.dualPage,
+              onChanged: (val) {
+                _update(_current.copyWith(dualPage: val));
+              },
+            ),
+            const SizedBox(height: 16),
+
+            // Ночной режим и яркость
+            const Text(
+              'Ночной режим и фильтры',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Глубокое затемнение экрана:'),
+                Text('${(_current.customBrightness * 100).toInt()}%',
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.amber)),
+              ],
+            ),
+            Slider(
+              value: _current.customBrightness,
+              min: 0.0,
+              max: 0.8,
+              divisions: 16,
+              onChanged: (val) {
+                _update(_current.copyWith(customBrightness: val));
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Тёплый ночной фильтр (Сепия)'),
+              subtitle: const Text('Мягкий тёплый оттенок для чтения в темноте'),
+              value: _current.warmFilter,
+              onChanged: (val) {
+                _update(_current.copyWith(warmFilter: val));
+              },
+            ),
             const SizedBox(height: 16),
 
             // Фон страницы

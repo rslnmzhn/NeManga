@@ -1,7 +1,41 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/reader_models.dart';
+import 'archive_service.dart';
+import 'compressor_service.dart';
+
+class StorageStats {
+  final int totalMangaCount;
+  final int totalChaptersCount;
+  final int optimizedChaptersCount;
+  final int totalSizeBytes;
+  final int estimatedSavedBytes;
+
+  const StorageStats({
+    required this.totalMangaCount,
+    required this.totalChaptersCount,
+    required this.optimizedChaptersCount,
+    required this.totalSizeBytes,
+    required this.estimatedSavedBytes,
+  });
+
+  String get savedFormatted => _formatBytes(estimatedSavedBytes);
+  String get totalSizeFormatted => _formatBytes(totalSizeBytes);
+
+  static String _formatBytes(int bytes) {
+    if (bytes <= 0) return '0 МБ';
+    const suffixes = ['Б', 'КБ', 'МБ', 'ГБ'];
+    int i = 0;
+    double size = bytes.toDouble();
+    while (size >= 1024 && i < suffixes.length - 1) {
+      size /= 1024;
+      i++;
+    }
+    return '${size.toStringAsFixed(1)} ${suffixes[i]}';
+  }
+}
 
 class StorageService {
   static const String _keySettings = 'nemanga_reader_settings';
@@ -338,5 +372,163 @@ class StorageService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyRecentBooks);
     await prefs.remove(_keyMangaGroups);
+  }
+
+  /// Получить сводную статистику хранилища и сэкономленного места
+  static Future<StorageStats> getStorageStats() async {
+    final groups = await getMangaGroups();
+    int totalChapters = 0;
+    int optChapters = 0;
+    int totalBytes = 0;
+
+    for (final g in groups) {
+      for (final c in g.chapters) {
+        totalChapters++;
+        totalBytes += c.fileSize;
+        if (c.isOptimized) {
+          optChapters++;
+        }
+      }
+    }
+
+    // Если глава сжата в WebP, средняя экономия составляет ~75% (т.е. сжатый файл — это ~25%, сэкономлено ~3x размера)
+    final savedEstimate = optChapters > 0 ? (totalBytes * 2.5).toInt() : 0;
+
+    return StorageStats(
+      totalMangaCount: groups.length,
+      totalChaptersCount: totalChapters,
+      optimizedChaptersCount: optChapters,
+      totalSizeBytes: totalBytes,
+      estimatedSavedBytes: savedEstimate,
+    );
+  }
+
+  /// Автосканирование папки Download/NeManga и импорт всех найденных .cbz и .zip архивов
+  static Future<int> scanAndImportPublicManga() async {
+    final publicDir = await CompressorService.getPublicMangaDirectory();
+    if (!await publicDir.exists()) return 0;
+
+    final existingGroups = await getMangaGroups();
+    final knownPaths = <String>{};
+    for (final g in existingGroups) {
+      for (final c in g.chapters) {
+        knownPaths.add(c.filePath);
+      }
+    }
+
+    final newFiles = <File>[];
+    await for (final entity in publicDir.list(recursive: true)) {
+      if (entity is File) {
+        final lower = entity.path.toLowerCase();
+        if ((lower.endsWith('.cbz') || lower.endsWith('.zip')) && !knownPaths.contains(entity.path)) {
+          newFiles.add(entity);
+        }
+      }
+    }
+
+    if (newFiles.isEmpty) return 0;
+
+    int importedCount = 0;
+    final groupsMap = <String, List<File>>{};
+    for (final f in newFiles) {
+      final parent = p.basename(p.dirname(f.path));
+      final groupName = (parent.isNotEmpty && parent != 'NeManga' && parent != '.')
+          ? parent
+          : p.basenameWithoutExtension(f.path);
+      groupsMap.putIfAbsent(groupName, () => []).add(f);
+    }
+
+    for (final entry in groupsMap.entries) {
+      final title = entry.key;
+      final files = entry.value;
+      files.sort((a, b) => ArchiveService.naturalCompare(p.basename(a.path), p.basename(b.path)));
+
+      final chapters = <ChapterItem>[];
+      String? cover;
+      for (int i = 0; i < files.length; i++) {
+        final f = files[i];
+        final chTitle = p.basenameWithoutExtension(f.path);
+        final size = f.existsSync() ? f.lengthSync() : 0;
+        final isOpt = f.path.toLowerCase().endsWith('.cbz');
+        if (i == 0) {
+          cover = await ArchiveService.extractCoverOnly(f.path);
+        }
+        chapters.add(ChapterItem(
+          id: f.path,
+          filePath: f.path,
+          title: chTitle,
+          totalPages: 0,
+          lastPage: 0,
+          lastReadTime: DateTime.now(),
+          fileSize: size,
+          isOptimized: isOpt,
+        ));
+      }
+
+      final existingIdx = existingGroups.indexWhere((g) => g.title.toLowerCase() == title.toLowerCase());
+      if (existingIdx != -1) {
+        await addChaptersToGroup(groupId: existingGroups[existingIdx].id, newChapters: chapters);
+      } else {
+        final newGroup = MangaGroup(
+          id: 'group_${DateTime.now().millisecondsSinceEpoch}_$importedCount',
+          title: title,
+          coverPath: cover,
+          status: ReadingStatus.reading,
+          chapters: chapters,
+          currentChapterIndex: 0,
+          updatedAt: DateTime.now(),
+        );
+        await saveMangaGroup(newGroup);
+      }
+      importedCount += files.length;
+    }
+
+    return importedCount;
+  }
+
+  /// Экспорт всей библиотеки и настроек в JSON файл в Загрузки/NeManga
+  static Future<String> exportBackupToJson() async {
+    final groups = await getMangaGroups();
+    final settings = await loadSettings();
+    final data = {
+      'version': 1,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'settings': settings.toMap(),
+      'groups': groups.map((g) => g.toMap()).toList(),
+    };
+
+    final jsonString = const JsonEncoder.withIndent('  ').convert(data);
+    final publicDir = await CompressorService.getPublicMangaDirectory();
+    final dateStr = DateTime.now().toIso8601String().split('T').first;
+    final backupFile = File(p.join(publicDir.path, 'nemanga_backup_$dateStr.json'));
+    await backupFile.writeAsString(jsonString);
+    await CompressorService.scanMediaFile(backupFile.path);
+    return backupFile.path;
+  }
+
+  /// Импорт библиотеки из JSON строки
+  static Future<int> importBackupFromJson(String jsonString) async {
+    final Map<String, dynamic> data = json.decode(jsonString);
+    final groupsRaw = data['groups'] as List<dynamic>? ?? [];
+    final importedGroups = <MangaGroup>[];
+
+    for (final item in groupsRaw) {
+      try {
+        final g = MangaGroup.fromMap(item as Map<String, dynamic>);
+        importedGroups.add(g);
+      } catch (_) {}
+    }
+
+    if (data['settings'] != null) {
+      try {
+        final s = ReaderSettings.fromMap(data['settings'] as Map<String, dynamic>);
+        await saveSettings(s);
+      } catch (_) {}
+    }
+
+    if (importedGroups.isNotEmpty) {
+      await saveAllGroups(importedGroups);
+    }
+    return importedGroups.length;
   }
 }

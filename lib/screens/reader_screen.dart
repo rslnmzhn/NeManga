@@ -160,6 +160,27 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
 
     _webtoonScrollController.addListener(_onWebtoonScroll);
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (!_settings.volumeKeysNavigation) return false;
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.audioVolumeDown) {
+        _nextPage();
+        return true;
+      } else if (event.logicalKey == LogicalKeyboardKey.audioVolumeUp) {
+        _prevPage();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _vibrate() {
+    if (_settings.hapticFeedback) {
+      HapticFeedback.selectionClick();
+    }
   }
 
   void _initAspectRatios() {
@@ -185,6 +206,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _hideControlsTimer?.cancel();
     _webtoonScrollController.removeListener(_onWebtoonScroll);
     _webtoonScrollController.dispose();
@@ -325,17 +347,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _currentPage = target;
     });
 
+    _vibrate();
+
     if (_settings.mode == ReaderMode.webtoon) {
       _jumpToWebtoonPage(target);
     } else {
       if (_pageController.hasClients) {
-        _pageController.jumpToPage(target);
+        if (_settings.dualPage && _settings.mode != ReaderMode.verticalPage) {
+          final pairIdx = (target / 2).floor();
+          _pageController.jumpToPage(pairIdx);
+        } else {
+          _pageController.jumpToPage(target);
+        }
       }
     }
     _saveCurrentProgress();
   }
 
   void _nextPage() {
+    _vibrate();
     if (_settings.mode == ReaderMode.webtoon) {
       if (!_webtoonScrollController.hasClients) return;
       final step = MediaQuery.of(context).size.height * 0.85;
@@ -348,16 +378,40 @@ class _ReaderScreenState extends State<ReaderScreen> {
         curve: Curves.easeOut,
       );
     } else {
-      if (_currentPage < widget.pagePaths.length - 1) {
-        _pageController.nextPage(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
+      if (_settings.dualPage && _settings.mode != ReaderMode.verticalPage) {
+        final pairCount = (widget.pagePaths.length / 2).ceil();
+        final currentPair = (_currentPage / 2).floor();
+        if (currentPair < pairCount - 1) {
+          _pageController.nextPage(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        } else if (widget.mangaGroup != null &&
+            widget.currentChapterIndex < widget.mangaGroup!.chapters.length - 1) {
+          _pageController.nextPage(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
+      } else {
+        if (_currentPage < widget.pagePaths.length - 1) {
+          _pageController.nextPage(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        } else if (widget.mangaGroup != null &&
+            widget.currentChapterIndex < widget.mangaGroup!.chapters.length - 1) {
+          _pageController.nextPage(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
       }
     }
   }
 
   void _prevPage() {
+    _vibrate();
     if (_settings.mode == ReaderMode.webtoon) {
       if (!_webtoonScrollController.hasClients) return;
       final step = MediaQuery.of(context).size.height * 0.85;
@@ -370,11 +424,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
         curve: Curves.easeOut,
       );
     } else {
-      if (_currentPage > 0) {
-        _pageController.previousPage(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
+      if (_settings.dualPage && _settings.mode != ReaderMode.verticalPage) {
+        final currentPair = (_currentPage / 2).floor();
+        if (currentPair > 0) {
+          _pageController.previousPage(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
+      } else {
+        if (_currentPage > 0) {
+          _pageController.previousPage(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
       }
     }
   }
@@ -559,6 +623,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 child: _buildReaderContent(),
               ),
 
+              // Фильтр глубокого затемнения и сепии
+              if (_settings.customBrightness > 0.0 || _settings.warmFilter)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Container(
+                      color: _settings.warmFilter
+                          ? Colors.amber.withValues(
+                              alpha: 0.12 + (_settings.customBrightness * 0.45))
+                          : Colors.black.withValues(alpha: _settings.customBrightness),
+                    ),
+                  ),
+                ),
+
               // 2. Плавающий бейдж с номером страницы внизу справа
               if (!_showControls)
                 Positioned(
@@ -632,12 +709,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
         final screenWidth = constraints.maxWidth;
         _calculateHeights(screenWidth);
 
+        final hasGroup = widget.mangaGroup != null;
+        final totalItems = widget.pagePaths.length + (hasGroup ? 1 : 0);
+
         return ListView.builder(
           controller: _webtoonScrollController,
           physics: const BouncingScrollPhysics(),
           padding: EdgeInsets.zero,
-          itemCount: widget.pagePaths.length,
+          itemCount: totalItems,
           itemBuilder: (context, index) {
+            if (index == widget.pagePaths.length) {
+              return _buildEndOfChapterWidget(screenWidth);
+            }
+
             final filePath = widget.pagePaths[index];
             final ratio = _pageRatios[index] ?? 1.414;
             final expectedHeight = screenWidth * ratio;
@@ -676,20 +760,101 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Widget _buildPageView() {
     final isVertical = _settings.mode == ReaderMode.verticalPage;
     final isRtl = _settings.mode == ReaderMode.horizontalRtl;
+    final hasGroup = widget.mangaGroup != null;
+    final isDualPage = _settings.dualPage && !isVertical;
+
+    if (isDualPage) {
+      final pairCount = (widget.pagePaths.length / 2).ceil();
+      final totalItems = pairCount + (hasGroup ? 1 : 0);
+
+      return PageView.builder(
+        controller: _pageController,
+        scrollDirection: Axis.horizontal,
+        reverse: isRtl,
+        physics: const BouncingScrollPhysics(),
+        itemCount: totalItems,
+        onPageChanged: (pairIdx) {
+          final singleIdx = (pairIdx * 2).clamp(0, widget.pagePaths.length - 1);
+          setState(() {
+            _currentPage = singleIdx;
+          });
+          _vibrate();
+          _saveCurrentProgress();
+        },
+        itemBuilder: (context, pairIdx) {
+          if (pairIdx == pairCount) {
+            return Center(
+              child: _buildEndOfChapterWidget(MediaQuery.of(context).size.width * 0.9),
+            );
+          }
+
+          final p1Index = pairIdx * 2;
+          final p2Index = p1Index + 1;
+          final hasP2 = p2Index < widget.pagePaths.length;
+
+          final firstPageWidget = Expanded(
+            child: InteractiveViewer(
+              minScale: 1.0,
+              maxScale: 4.0,
+              child: Center(
+                child: Image.file(
+                  File(widget.pagePaths[p1Index]),
+                  fit: _getImageFit(),
+                ),
+              ),
+            ),
+          );
+
+          if (!hasP2) {
+            return Center(child: firstPageWidget);
+          }
+
+          final secondPageWidget = Expanded(
+            child: InteractiveViewer(
+              minScale: 1.0,
+              maxScale: 4.0,
+              child: Center(
+                child: Image.file(
+                  File(widget.pagePaths[p2Index]),
+                  fit: _getImageFit(),
+                ),
+              ),
+            ),
+          );
+
+          return Row(
+            children: isRtl
+                ? [secondPageWidget, const SizedBox(width: 4), firstPageWidget]
+                : [firstPageWidget, const SizedBox(width: 4), secondPageWidget],
+          );
+        },
+      );
+    }
+
+    final totalItems = widget.pagePaths.length + (hasGroup ? 1 : 0);
 
     return PageView.builder(
       controller: _pageController,
       scrollDirection: isVertical ? Axis.vertical : Axis.horizontal,
       reverse: isRtl,
       physics: const BouncingScrollPhysics(),
-      itemCount: widget.pagePaths.length,
+      itemCount: totalItems,
       onPageChanged: (index) {
-        setState(() {
-          _currentPage = index;
-        });
-        _saveCurrentProgress();
+        if (index < widget.pagePaths.length) {
+          setState(() {
+            _currentPage = index;
+          });
+          _vibrate();
+          _saveCurrentProgress();
+        }
       },
       itemBuilder: (context, index) {
+        if (index == widget.pagePaths.length) {
+          return Center(
+            child: _buildEndOfChapterWidget(MediaQuery.of(context).size.width * 0.9),
+          );
+        }
+
         final filePath = widget.pagePaths[index];
         return InteractiveViewer(
           minScale: 1.0,
@@ -715,6 +880,266 @@ class _ReaderScreenState extends State<ReaderScreen> {
         );
       },
     );
+  }
+
+  Widget _buildEndOfChapterWidget(double width) {
+    final group = widget.mangaGroup;
+    final primary = Theme.of(context).colorScheme.primary;
+    final hasNext = group != null && widget.currentChapterIndex < group.chapters.length - 1;
+    final nextChapter = hasNext ? group.chapters[widget.currentChapterIndex + 1] : null;
+
+    return Center(
+      child: Container(
+        width: width.clamp(280.0, 500.0),
+        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1B1E26),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: primary.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                hasNext ? Icons.auto_stories_rounded : Icons.emoji_events_rounded,
+                color: primary,
+                size: 36,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              hasNext ? 'Глава завершена' : 'Манга прочитана!',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 6),
+            if (hasNext && nextChapter != null) ...[
+              Text(
+                'Следующая: ${nextChapter.title}',
+                style: const TextStyle(fontSize: 14, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 20),
+                  label: const Text('Следующая глава', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                  onPressed: () => _switchChapter(widget.currentChapterIndex + 1),
+                ),
+              ),
+            ] else ...[
+              const Text(
+                '🎉 Вы прочитали все доступные главы этой манги!',
+                style: TextStyle(fontSize: 13, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  icon: const Icon(Icons.check_circle_outline_rounded, size: 20),
+                  label: const Text('Отлично', style: TextStyle(fontWeight: FontWeight.bold)),
+                  onPressed: () {
+                    if (group != null) {
+                      StorageService.updateGroupStatus(group.id, ReadingStatus.completed);
+                    }
+                    Navigator.pop(context);
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showThumbnailGrid() {
+    _hideControlsTimer?.cancel();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF14171E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Страницы главы (${widget.pagePaths.length})',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: GridView.builder(
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    childAspectRatio: 0.7,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                  ),
+                  itemCount: widget.pagePaths.length,
+                  itemBuilder: (context, index) {
+                    final isCurrent = index == _currentPage;
+                    return InkWell(
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _goToPage(index);
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isCurrent ? Theme.of(context).colorScheme.primary : Colors.white12,
+                            width: isCurrent ? 2.5 : 1,
+                          ),
+                        ),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(7),
+                              child: Image.file(
+                                File(widget.pagePaths[index]),
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                            Positioned(
+                              bottom: 4,
+                              right: 4,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.75),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  '${index + 1}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: isCurrent ? Theme.of(context).colorScheme.primary : Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    ).then((_) => _scheduleHideControls());
+  }
+
+  void _showChaptersList() {
+    final group = widget.mangaGroup;
+    if (group == null || group.chapters.isEmpty) return;
+
+    _hideControlsTimer?.cancel();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF14171E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Главы (${group.chapters.length})',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: group.chapters.length,
+                  itemBuilder: (ctx, idx) {
+                    final ch = group.chapters[idx];
+                    final isCurrent = idx == widget.currentChapterIndex;
+                    return ListTile(
+                      dense: true,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      selected: isCurrent,
+                      selectedTileColor: Theme.of(context).colorScheme.primary.withOpacity(0.12),
+                      title: Text(
+                        ch.title,
+                        style: TextStyle(
+                          fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                          color: isCurrent ? Theme.of(context).colorScheme.primary : Colors.white,
+                        ),
+                      ),
+                      trailing: isCurrent ? const Icon(Icons.check, size: 18) : null,
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        if (!isCurrent) {
+                          _switchChapter(idx);
+                        }
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    ).then((_) => _scheduleHideControls());
   }
 
   Widget _buildTopBar() {
@@ -832,29 +1257,35 @@ class _ReaderScreenState extends State<ReaderScreen> {
               ),
             ],
           ),
-          // Быстрые кнопки режима чтения
+          // Быстрые кнопки режима чтения и навигации
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
+              IconButton(
+                icon: const Icon(Icons.grid_view_rounded, color: Colors.white70),
+                tooltip: 'Сетка страниц',
+                onPressed: _showThumbnailGrid,
+              ),
+              if (widget.mangaGroup != null && widget.mangaGroup!.chapters.length > 1)
+                IconButton(
+                  icon: const Icon(Icons.list_alt_rounded, color: Colors.white70),
+                  tooltip: 'Список глав',
+                  onPressed: _showChaptersList,
+                ),
               _buildQuickModeBtn(
                 label: 'Вебтун',
                 mode: ReaderMode.webtoon,
                 icon: Icons.view_day_outlined,
               ),
               _buildQuickModeBtn(
-                label: 'Вверх/Вниз',
-                mode: ReaderMode.verticalPage,
-                icon: Icons.swap_vert,
-              ),
-              _buildQuickModeBtn(
                 label: 'Манга RTL',
                 mode: ReaderMode.horizontalRtl,
                 icon: Icons.keyboard_double_arrow_left,
               ),
-              _buildQuickModeBtn(
-                label: 'Комикс LTR',
-                mode: ReaderMode.horizontalLtr,
-                icon: Icons.keyboard_double_arrow_right,
+              IconButton(
+                icon: const Icon(Icons.tune_rounded, color: Colors.white70),
+                tooltip: 'Настройки',
+                onPressed: _openSettings,
               ),
             ],
           ),

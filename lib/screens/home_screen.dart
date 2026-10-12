@@ -31,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = false;
   String _loadingMessage = '';
   ReaderSettings _settings = const ReaderSettings();
+  bool _showSplashIntro = true;
 
   @override
   void initState() {
@@ -39,6 +40,13 @@ class _HomeScreenState extends State<HomeScreen> {
     UpdateService.cleanOldInstallers();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkUpdate(silent: true);
+    });
+    Future.delayed(const Duration(milliseconds: 1400), () {
+      if (mounted) {
+        setState(() {
+          _showSplashIntro = false;
+        });
+      }
     });
   }
 
@@ -110,6 +118,19 @@ class _HomeScreenState extends State<HomeScreen> {
         return matchesTitle || matchesTag;
       });
     }).toList();
+
+    // Сортировка библиотеки
+    switch (_settings.sortOrder) {
+      case LibrarySortOrder.recent:
+        _filteredGroups.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        break;
+      case LibrarySortOrder.title:
+        _filteredGroups.sort((a, b) => ArchiveService.naturalCompare(a.title, b.title));
+        break;
+      case LibrarySortOrder.progress:
+        _filteredGroups.sort((a, b) => b.overallProgressPercent.compareTo(a.overallProgressPercent));
+        break;
+    }
   }
 
   Future<void> _pickAndOpenArchives() async {
@@ -463,6 +484,285 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Widget _buildStatRow(String label, String value, {bool highlight = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+              color: highlight ? Colors.greenAccent : Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _scanFolder() async {
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = 'Сканирование папки NeManga...';
+    });
+
+    try {
+      final imported = await StorageService.scanAndImportPublicManga();
+      await _loadData();
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            imported > 0
+                ? 'Синхронизация завершена. Найдено новых глав: $imported'
+                : 'Новых архивов в папке Загрузки/NeManga не найдено',
+          ),
+          backgroundColor: imported > 0 ? Colors.green : Colors.blueGrey,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка сканирования: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showStorageDashboard() async {
+    final stats = await StorageService.getStorageStats();
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.amber.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.pie_chart_outline_rounded, color: Colors.amber, size: 24),
+            ),
+            const SizedBox(width: 12),
+            const Text('Дашборд памяти', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildStatRow('Всего тайтлов:', '${stats.totalMangaCount}'),
+            _buildStatRow('Всего глав:', '${stats.totalChaptersCount}'),
+            _buildStatRow('Сжато в WebP:', '${stats.optimizedChaptersCount} из ${stats.totalChaptersCount}'),
+            const Divider(height: 20),
+            _buildStatRow('Объём на диске:', stats.totalSizeFormatted),
+            _buildStatRow(
+              'Сэкономлено памяти:',
+              stats.savedFormatted,
+              highlight: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Понятно'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showBackupRestoreDialog() async {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Резервное копирование', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Вы можете сохранить всю вашу библиотеку (статусы, главы, теги, настройки) в один файл или восстановить её.',
+              style: TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.upload_file_rounded),
+                label: const Text('Экспорт библиотеки в JSON'),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  final path = await StorageService.exportBackupToJson();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Бэкап сохранён в: $path'), backgroundColor: Colors.green),
+                    );
+                  }
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.download_rounded),
+                label: const Text('Импорт библиотеки из JSON'),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  try {
+                    final res = await FilePicker.pickFiles(
+                      type: FileType.custom,
+                      allowedExtensions: ['json'],
+                    );
+                    if (res.isNotEmpty && res.first.path != null) {
+                      final str = await File(res.first.path!).readAsString();
+                      final count = await StorageService.importBackupFromJson(str);
+                      await _loadData();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Импортировано тайтлов: $count'), backgroundColor: Colors.green),
+                        );
+                      }
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Ошибка импорта: $e')),
+                      );
+                    }
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Закрыть'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showThemeDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Оформление и темы', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Фоновая тема:', style: TextStyle(fontSize: 13, color: Colors.grey)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: AppThemeMode.values.map((t) {
+                      final sel = _settings.appTheme == t;
+                      return ChoiceChip(
+                        label: Text(t.label),
+                        selected: sel,
+                        onSelected: (val) async {
+                          final updated = _settings.copyWith(appTheme: t);
+                          await StorageService.saveSettings(updated);
+                          setState(() => _settings = updated);
+                          setDialogState(() {});
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Акцентный цвет (Аниме-палитра):', style: TextStyle(fontSize: 13, color: Colors.grey)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: AppAccentColor.values.map((c) {
+                      final sel = _settings.accentColor == c;
+                      return ChoiceChip(
+                        avatar: CircleAvatar(backgroundColor: c.color, radius: 8),
+                        label: Text(c.label),
+                        selected: sel,
+                        onSelected: (val) async {
+                          final updated = _settings.copyWith(accentColor: c);
+                          await StorageService.saveSettings(updated);
+                          setState(() => _settings = updated);
+                          setDialogState(() {});
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Готово')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showSortDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Сортировка библиотеки', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: LibrarySortOrder.values.map((order) {
+            return RadioListTile<LibrarySortOrder>(
+              title: Text(order.label),
+              value: order,
+              groupValue: _settings.sortOrder,
+              onChanged: (val) async {
+                if (val != null) {
+                  final nav = Navigator.of(ctx);
+                  final updated = _settings.copyWith(sortOrder: val);
+                  await StorageService.saveSettings(updated);
+                  if (mounted) {
+                    setState(() {
+                      _settings = updated;
+                      _applyFilter();
+                    });
+                    nav.pop();
+                  }
+                }
+              },
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
   Future<void> _showAboutDialog() async {
     final version = await UpdateService.getCurrentVersion();
     if (!mounted) return;
@@ -513,11 +813,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
+    final primary = _settings.accentColor.color;
+    final bg = _settings.appTheme.backgroundColor;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F1115),
+      backgroundColor: bg,
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: FloatingActionButton(
         backgroundColor: primary,
@@ -529,7 +829,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: const Icon(Icons.add_rounded, size: 36),
       ),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0F1115),
+        backgroundColor: bg,
         elevation: 0,
         title: Row(
           children: [
@@ -562,19 +862,84 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.system_update_alt_rounded),
-            tooltip: 'Проверить обновления',
-            onPressed: () => _checkUpdate(silent: false),
+            icon: const Icon(Icons.sync_rounded),
+            tooltip: 'Сканировать папку NeManga',
+            onPressed: _scanFolder,
           ),
           IconButton(
-            icon: const Icon(Icons.cleaning_services_outlined),
-            tooltip: 'Очистить кэш страниц',
-            onPressed: _confirmClearCache,
+            icon: const Icon(Icons.palette_outlined),
+            tooltip: 'Оформление и темы',
+            onPressed: _showThemeDialog,
           ),
-          IconButton(
-            icon: const Icon(Icons.info_outline_rounded),
-            tooltip: 'О приложении',
-            onPressed: _showAboutDialog,
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            color: const Color(0xFF1B1E26),
+            onSelected: (val) {
+              if (val == 'storage') {
+                _showStorageDashboard();
+              } else if (val == 'backup') {
+                _showBackupRestoreDialog();
+              } else if (val == 'clear_cache') {
+                _confirmClearCache();
+              } else if (val == 'update') {
+                _checkUpdate(silent: false);
+              } else if (val == 'about') {
+                _showAboutDialog();
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'storage',
+                child: Row(
+                  children: [
+                    Icon(Icons.pie_chart_outline_rounded, size: 18, color: Colors.amber),
+                    SizedBox(width: 10),
+                    Text('Дашборд памяти'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'backup',
+                child: Row(
+                  children: [
+                    Icon(Icons.save_as_outlined, size: 18, color: Colors.blueAccent),
+                    SizedBox(width: 10),
+                    Text('Резервное копирование'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'clear_cache',
+                child: Row(
+                  children: [
+                    Icon(Icons.cleaning_services_outlined, size: 18, color: Colors.orangeAccent),
+                    SizedBox(width: 10),
+                    Text('Очистить кэш страниц'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'update',
+                child: Row(
+                  children: [
+                    Icon(Icons.system_update_alt_rounded, size: 18, color: Colors.greenAccent),
+                    SizedBox(width: 10),
+                    Text('Проверить обновления'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'about',
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded, size: 18, color: Colors.white70),
+                    SizedBox(width: 10),
+                    Text('О приложении'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -614,11 +979,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                 color: Colors.white,
                               ),
                             ),
-                            if (_filteredGroups.isNotEmpty)
-                              Text(
-                                '${_filteredGroups.length} шт.',
-                                style: const TextStyle(fontSize: 14, color: Colors.grey),
-                              ),
+                            Row(
+                              children: [
+                                if (_filteredGroups.isNotEmpty)
+                                  Text(
+                                    '${_filteredGroups.length} шт.',
+                                    style: const TextStyle(fontSize: 13, color: Colors.grey),
+                                  ),
+                                const SizedBox(width: 4),
+                                IconButton(
+                                  icon: const Icon(Icons.sort_rounded, size: 20, color: Colors.white70),
+                                  tooltip: 'Сортировка: ${_settings.sortOrder.label}',
+                                  onPressed: _showSortDialog,
+                                ),
+                              ],
+                            ),
                           ],
                         ),
                         const SizedBox(height: 10),
@@ -678,6 +1053,46 @@ class _HomeScreenState extends State<HomeScreen> {
                           fontSize: 15,
                           fontWeight: FontWeight.w500,
                         ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          // Анимированный сплэш-скрин при старте
+          if (_showSplashIntro)
+            AnimatedOpacity(
+              opacity: _showSplashIntro ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 350),
+              child: Container(
+                color: bg,
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(28),
+                        child: Image.asset(
+                          'assets/icon/app_icon.png',
+                          width: 110,
+                          height: 110,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        'NeManga',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: primary,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Приятного чтения!',
+                        style: TextStyle(fontSize: 14, color: Colors.grey),
                       ),
                     ],
                   ),
@@ -820,7 +1235,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF171A21),
+        color: _settings.appTheme.cardColor,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         boxShadow: [
