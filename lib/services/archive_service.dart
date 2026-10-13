@@ -283,4 +283,82 @@ class ArchiveService {
       debugPrint('Ошибка очистки кэша: $e');
     }
   }
+
+  /// Определение чистого названия манги из списка путей глав (никогда не возвращает NeManga или системные папки)
+  static String deriveMangaTitle({
+    required List<String> filePaths,
+    String? fallbackDirName,
+  }) {
+    if (filePaths.isEmpty) return 'Манга';
+
+    const genericNames = {
+      'download',
+      'downloads',
+      'nemanga',
+      'storage',
+      'emulated',
+      '0',
+      'sdcard',
+      'documents',
+      'dcim',
+      'cache',
+      'tmp',
+      'files',
+      '.',
+      '',
+    };
+
+    // 1. Проверяем переданное имя папки
+    if (fallbackDirName != null &&
+        !genericNames.contains(fallbackDirName.toLowerCase().trim())) {
+      return fallbackDirName.trim();
+    }
+
+    // 2. Проверяем родительскую папку исходных файлов
+    final parentName = p.basename(p.dirname(filePaths.first));
+    if (!genericNames.contains(parentName.toLowerCase().trim())) {
+      return parentName.trim();
+    }
+
+    // 3. Вычисляем общий префикс названий файлов
+    final baseNames = filePaths.map((f) => p.basenameWithoutExtension(f)).toList();
+    if (baseNames.length == 1) {
+      final singleClean = _cleanTitleSuffix(baseNames.first);
+      return singleClean.isNotEmpty ? singleClean : baseNames.first;
+    }
+
+    final commonPrefix = _findLongestCommonPrefix(baseNames);
+    final cleaned = _cleanTitleSuffix(commonPrefix);
+    if (cleaned.length >= 2 && !genericNames.contains(cleaned.toLowerCase())) {
+      return cleaned;
+    }
+
+    // 4. Если главы названы только цифрами (01, 02), очищаем имя первого файла
+    final firstClean = _cleanTitleSuffix(baseNames.first);
+    return firstClean.isNotEmpty ? firstClean : baseNames.first;
+  }
+
+  static String _cleanTitleSuffix(String str) {
+    var result = str.trim();
+    result = result.replaceAll(RegExp(r'[\s_\-]+$'), '');
+    result = result.replaceAll(
+      RegExp(r'[\s_\-]+(vol|volume|том|ch|chapter|глава|part|часть)[\s_\-\d]*$', caseSensitive: false),
+      '',
+    );
+    result = result.replaceAll(RegExp(r'[\s_\-\d]+$'), '');
+    result = result.replaceAll(RegExp(r'[\s_\-]+$'), '');
+    return result.trim();
+  }
+
+  static String _findLongestCommonPrefix(List<String> strings) {
+    if (strings.isEmpty) return '';
+    var prefix = strings.first;
+    for (int i = 1; i < strings.length; i++) {
+      while (!strings[i].startsWith(prefix)) {
+        if (prefix.isEmpty) return '';
+        prefix = prefix.substring(0, prefix.length - 1);
+      }
+    }
+    return prefix;
+  }
 }

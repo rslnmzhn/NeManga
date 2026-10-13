@@ -1,8 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nemanga/models/reader_models.dart';
 import 'package:nemanga/services/archive_service.dart';
+import 'package:nemanga/services/storage_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('AuthorDetector Tests', () {
     test('Extracts author from bracket notations', () {
       expect(AuthorDetector.detectAuthor('[Oda Eiichiro] One Piece'), 'Oda Eiichiro');
@@ -34,6 +38,62 @@ void main() {
       expect(AuthorDetector.detectAuthor('Takehiko Inoue Real', titles), 'Takehiko Inoue');
       expect(AuthorDetector.detectAuthor('Takehiko Inoue Vagabond', titles), 'Takehiko Inoue');
       expect(AuthorDetector.detectAuthor('Slam Dunk Vol 1', titles), isNull);
+    });
+  });
+
+  group('Manga Title Derivation and Progress Tests', () {
+    test('deriveMangaTitle extracts common title and never names manga NeManga or Downloads', () {
+      final files1 = [
+        '/storage/emulated/0/Download/NeManga/One Piece - Ch 01.cbz',
+        '/storage/emulated/0/Download/NeManga/One Piece - Ch 02.cbz',
+        '/storage/emulated/0/Download/NeManga/One Piece - Ch 03.cbz',
+      ];
+      expect(ArchiveService.deriveMangaTitle(filePaths: files1), 'One Piece');
+
+      final files2 = [
+        '/storage/emulated/0/Download/Naruto_01.zip',
+        '/storage/emulated/0/Download/Naruto_02.zip',
+      ];
+      expect(ArchiveService.deriveMangaTitle(filePaths: files2), 'Naruto');
+
+      final files3 = [
+        '/storage/emulated/0/Download/Berserk/ch1.zip',
+        '/storage/emulated/0/Download/Berserk/ch2.zip',
+      ];
+      expect(ArchiveService.deriveMangaTitle(filePaths: files3), 'Berserk');
+    });
+
+    test('Unopened manga chapters calculate 0% progress and are not marked completed', () {
+      final ch1 = ChapterItem(
+        id: '1',
+        filePath: '/tmp/1.cbz',
+        title: 'Глава 1',
+        totalPages: 0,
+        lastPage: 0,
+        lastReadTime: DateTime.now(),
+        fileSize: 1000,
+      );
+      final ch2 = ChapterItem(
+        id: '2',
+        filePath: '/tmp/2.cbz',
+        title: 'Глава 2',
+        totalPages: 0,
+        lastPage: 0,
+        lastReadTime: DateTime.now(),
+        fileSize: 1000,
+      );
+
+      final group = MangaGroup(
+        id: 'group_test',
+        title: 'New Manga',
+        status: ReadingStatus.reading,
+        chapters: [ch1, ch2],
+        updatedAt: DateTime.now(),
+      );
+
+      expect(group.isCompleted, isFalse);
+      expect(group.overallProgressFraction, 0.0);
+      expect(group.overallProgressPercent, 0);
     });
   });
 
@@ -89,16 +149,46 @@ void main() {
         return ArchiveService.naturalCompare(a.title, b.title);
       });
 
-      // Expected order by author:
-      // Kentaro Miura -> Berserk
-      // Kite Tite -> Bleach
-      // Urasawa Naoki -> 20th Century Boys, Monster
       expect(mangaList[0].displayAuthor(), 'Kentaro Miura');
       expect(mangaList[1].displayAuthor(), 'Kite Tite');
       expect(mangaList[2].displayAuthor(), 'Urasawa Naoki');
       expect(mangaList[2].title, '20th Century Boys');
       expect(mangaList[3].displayAuthor(), 'Urasawa Naoki');
       expect(mangaList[3].title, 'Monster');
+    });
+
+    test('StorageService saves and loads author tags and builds authors list', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      await StorageService.saveAuthorTags('Inio Asano', ['Драма', 'Психология']);
+      final tags = await StorageService.loadAllAuthorTags();
+      expect(tags['Inio Asano'], ['Драма', 'Психология']);
+
+      final m1 = MangaGroup(
+        id: 'm1',
+        title: '[Inio Asano] Solanin',
+        status: ReadingStatus.reading,
+        updatedAt: DateTime.now().subtract(const Duration(days: 1)),
+      );
+      final m2 = MangaGroup(
+        id: 'm2',
+        title: '[Inio Asano] Oyasumi Punpun',
+        coverPath: '/tmp/cover_punpun.jpg',
+        status: ReadingStatus.reading,
+        updatedAt: DateTime.now(), // latest!
+      );
+
+      final authors = StorageService.buildAuthorsList(
+        allGroups: [m1, m2],
+        authorTagsMap: tags,
+      );
+
+      expect(authors.length, 1);
+      final author = authors.first;
+      expect(author.name, 'Inio Asano');
+      expect(author.tags, ['Драма', 'Психология']);
+      expect(author.totalMangaCount, 2);
+      expect(author.coverPath, '/tmp/cover_punpun.jpg'); // taken from latest added manga!
     });
   });
 }

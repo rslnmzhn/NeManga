@@ -344,6 +344,25 @@ class ChapterItem {
   }
 }
 
+/// Информация об авторе манги для каталога
+class AuthorData {
+  final String name;
+  final List<String> tags;
+  final String? coverPath;
+  final List<MangaGroup> mangaList;
+
+  AuthorData({
+    required this.name,
+    this.tags = const [],
+    this.coverPath,
+    this.mangaList = const [],
+  });
+
+  int get totalMangaCount => mangaList.length;
+  int get totalChaptersCount => mangaList.fold(0, (sum, m) => sum + m.chapters.length);
+  int get totalSizeBytes => mangaList.fold(0, (sum, m) => sum + m.totalSize);
+}
+
 /// Помощник для автоматической каталогизации и извлечения авторов манги
 class AuthorDetector {
   static const Set<String> _ignoreTokens = {
@@ -474,9 +493,20 @@ class MangaGroup {
     int readPages = 0;
     int allPages = 0;
     for (final c in chapters) {
-      final t = c.totalPages > 0 ? c.totalPages : 1;
-      allPages += t;
-      readPages += (c.isCompleted ? t : (c.lastPage + 1).clamp(0, t));
+      if (c.totalPages > 0) {
+        allPages += c.totalPages;
+        if (c.isCompleted) {
+          readPages += c.totalPages;
+        } else if (c.lastPage > 0) {
+          readPages += (c.lastPage + 1).clamp(0, c.totalPages);
+        }
+      } else {
+        // Не открытая еще глава
+        allPages += 1;
+        if (c.isCompleted) {
+          readPages += 1;
+        }
+      }
     }
     return allPages > 0 ? (readPages / allPages).clamp(0.0, 1.0) : 0.0;
   }

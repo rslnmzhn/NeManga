@@ -1,3 +1,4 @@
+import 'author_detail_screen.dart';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -33,6 +34,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String _loadingMessage = '';
   ReaderSettings _settings = const ReaderSettings();
   bool _showSplashIntro = true;
+  bool _isAuthorsView = false;
+  bool _showSizeInsteadOfCount = false;
+  List<AuthorData> _authorsList = [];
 
   @override
   void initState() {
@@ -85,11 +89,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadData() async {
     final settings = await StorageService.loadSettings();
     final groups = await StorageService.getMangaGroups();
+    final authorTags = await StorageService.loadAllAuthorTags();
+    final authors = StorageService.buildAuthorsList(
+      allGroups: groups,
+      authorTagsMap: authorTags,
+    );
 
     if (mounted) {
       setState(() {
         _settings = settings;
         _allGroups = groups;
+        _authorsList = authors;
         _applyFilter();
       });
     }
@@ -198,6 +208,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final processedPaths = <String>[];
       int totalOriginal = 0;
       int totalCompressed = 0;
+      final groupTitle = ArchiveService.deriveMangaTitle(filePaths: validPaths);
 
       if (choice.shouldCompress) {
         for (int i = 0; i < validPaths.length; i++) {
@@ -211,6 +222,7 @@ class _HomeScreenState extends State<HomeScreen> {
           try {
             final res = await CompressorService.compressArchive(
               sourcePath: path,
+              subFolder: groupTitle,
               quality: choice.quality,
               maxWidth: choice.maxWidth,
               saveToPublicFolder: true,
@@ -251,10 +263,11 @@ class _HomeScreenState extends State<HomeScreen> {
         // Один архив: открываем сразу
         final filePath = processedPaths.first;
         final info = await ArchiveService.loadManga(filePath);
+        final title = groupTitle.isNotEmpty && groupTitle != 'NeManga' ? groupTitle : info.title;
 
         final group = await StorageService.findOrCreateGroupForFile(
           filePath: filePath,
-          title: info.title,
+          title: title,
           totalPages: info.pagePaths.length,
           currentPage: 0,
           coverPath: info.coverPath,
@@ -281,12 +294,6 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         // Несколько архивов: объединяем в одну группу манги
         processedPaths.sort(ArchiveService.naturalCompare);
-        final firstPath = processedPaths.first;
-        final parentDirName = p.basename(p.dirname(firstPath));
-        final groupTitle = (parentDirName.isNotEmpty && parentDirName != '.' && parentDirName != '/')
-            ? parentDirName
-            : p.basenameWithoutExtension(firstPath);
-
         final chapters = <ChapterItem>[];
         String? groupCover;
 
@@ -826,6 +833,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final primary = _settings.accentColor.color;
     final bg = _settings.appTheme.backgroundColor;
+    final cardBg = _settings.appTheme.cardColor;
 
     return Scaffold(
       backgroundColor: bg,
@@ -970,34 +978,84 @@ class _HomeScreenState extends State<HomeScreen> {
                         if (_allGroups.isNotEmpty) ...[
                           _buildSearchBar(),
                           const SizedBox(height: 12),
-
-                          // Вкладки статусов: Все, Читаю, В планах, Прочитано
-                          _buildStatusTabs(primary),
-                          const SizedBox(height: 12),
                         ],
 
-                        // Заголовок библиотеки
+                        // Заголовок библиотеки и таб-переключатель
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(
-                              _selectedStatus != null
-                                  ? _selectedStatus!.label
-                                  : (_searchQuery.isNotEmpty ? 'Результаты поиска' : 'Библиотека манги'),
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
+                            // Переключатель [ Манга ]  [ Авторы ]
+                            Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF161920),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white10),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _buildTabPill(
+                                    label: 'Манга',
+                                    icon: Icons.auto_stories_rounded,
+                                    isSelected: !_isAuthorsView,
+                                    onTap: () => setState(() => _isAuthorsView = false),
+                                    primary: primary,
+                                  ),
+                                  _buildTabPill(
+                                    label: 'Авторы',
+                                    icon: Icons.person_rounded,
+                                    isSelected: _isAuthorsView,
+                                    onTap: () => setState(() => _isAuthorsView = true),
+                                    primary: primary,
+                                  ),
+                                ],
                               ),
                             ),
                             Row(
                               children: [
-                                if (_filteredGroups.isNotEmpty)
+                                if (!_isAuthorsView && _filteredGroups.isNotEmpty)
+                                  InkWell(
+                                    onTap: () {
+                                      setState(() {
+                                        _showSizeInsteadOfCount = !_showSizeInsteadOfCount;
+                                      });
+                                    },
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                      child: Text(
+                                        _showSizeInsteadOfCount
+                                            ? _formatFileSize(_filteredGroups.fold(0, (sum, g) => sum + g.totalSize))
+                                            : '${_filteredGroups.length} шт.',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: _showSizeInsteadOfCount ? primary : Colors.grey,
+                                          fontWeight: _showSizeInsteadOfCount ? FontWeight.bold : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                else if (_isAuthorsView && _authorsList.isNotEmpty)
                                   Text(
-                                    '${_filteredGroups.length} шт.',
+                                    '${_authorsList.length} авт.',
                                     style: const TextStyle(fontSize: 13, color: Colors.grey),
                                   ),
                                 const SizedBox(width: 4),
+                                IconButton(
+                                  icon: Badge(
+                                    isLabelVisible: _selectedStatus != null,
+                                    child: Icon(
+                                      Icons.filter_list_rounded,
+                                      size: 20,
+                                      color: _selectedStatus != null ? primary : Colors.white70,
+                                    ),
+                                  ),
+                                  tooltip: _selectedStatus != null
+                                      ? 'Фильтр: ${_selectedStatus!.label}'
+                                      : 'Фильтры статуса',
+                                  onPressed: _showFilterDialog,
+                                ),
                                 IconButton(
                                   icon: const Icon(Icons.sort_rounded, size: 20, color: Colors.white70),
                                   tooltip: 'Сортировка: ${_settings.sortOrder.label}',
@@ -1013,28 +1071,58 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
 
-                // Сетка с большими обложками
-                if (_filteredGroups.isEmpty)
-                  SliverToBoxAdapter(child: _buildEmptyState())
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    sliver: SliverGrid(
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        childAspectRatio: 0.54,
-                        crossAxisSpacing: 14,
-                        mainAxisSpacing: 14,
+                // Сетка (Авторы или Манга)
+                if (_isAuthorsView) ...[
+                  if (_authorsList.isEmpty)
+                    SliverToBoxAdapter(
+                      child: Container(
+                        margin: const EdgeInsets.all(32),
+                        alignment: Alignment.center,
+                        child: const Text('В библиотеке пока нет авторов', style: TextStyle(color: Colors.grey)),
                       ),
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          final group = _filteredGroups[index];
-                          return _buildMangaGroupCard(group, primary);
-                        },
-                        childCount: _filteredGroups.length,
+                    )
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      sliver: SliverGrid(
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          childAspectRatio: 0.58,
+                          crossAxisSpacing: 14,
+                          mainAxisSpacing: 14,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final author = _authorsList[index];
+                            return _buildAuthorCard(author, primary, cardBg);
+                          },
+                          childCount: _authorsList.length,
+                        ),
                       ),
                     ),
-                  ),
+                ] else ...[
+                  if (_filteredGroups.isEmpty)
+                    SliverToBoxAdapter(child: _buildEmptyState())
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      sliver: SliverGrid(
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          childAspectRatio: 0.54,
+                          crossAxisSpacing: 14,
+                          mainAxisSpacing: 14,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final group = _filteredGroups[index];
+                            return _buildMangaGroupCard(group, primary);
+                          },
+                          childCount: _filteredGroups.length,
+                        ),
+                      ),
+                    ),
+                ],
                 const SliverToBoxAdapter(child: SizedBox(height: 80)),
               ],
             ),
@@ -1115,47 +1203,230 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildStatusTabs(Color primary) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          _buildStatusFilterChip(null, 'Все', Icons.apps_rounded, primary),
-          const SizedBox(width: 8),
-          _buildStatusFilterChip(ReadingStatus.reading, 'Читаю', Icons.auto_stories_rounded, primary),
-          const SizedBox(width: 8),
-          _buildStatusFilterChip(ReadingStatus.planned, 'В планах', Icons.bookmark_border_rounded, Colors.amber),
-          const SizedBox(width: 8),
-          _buildStatusFilterChip(ReadingStatus.completed, 'Прочитано', Icons.check_circle_outline_rounded, Colors.greenAccent),
-        ],
+  void _showFilterDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Фильтры статуса', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RadioListTile<ReadingStatus?>(
+              title: const Text('Все статусы'),
+              value: null,
+              groupValue: _selectedStatus,
+              onChanged: (val) {
+                setState(() {
+                  _selectedStatus = null;
+                  _applyFilter();
+                });
+                Navigator.pop(ctx);
+              },
+            ),
+            ...ReadingStatus.values.where((s) => s != ReadingStatus.none).map((s) {
+              return RadioListTile<ReadingStatus?>(
+                title: Text(s.label),
+                value: s,
+                groupValue: _selectedStatus,
+                onChanged: (val) {
+                  setState(() {
+                    _selectedStatus = val;
+                    _applyFilter();
+                  });
+                  Navigator.pop(ctx);
+                },
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildStatusFilterChip(ReadingStatus? status, String label, IconData icon, Color activeColor) {
-    final isSelected = _selectedStatus == status;
-    return ChoiceChip(
-      avatar: Icon(icon, size: 16, color: isSelected ? Colors.white : Colors.grey),
-      label: Text(label),
-      selected: isSelected,
-      selectedColor: activeColor.withValues(alpha: 0.25),
-      labelStyle: TextStyle(
-        color: isSelected ? Colors.white : Colors.white70,
-        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-        fontSize: 13,
+  Widget _buildTabPill({
+    required String label,
+    required IconData icon,
+    required bool isSelected,
+    required VoidCallback onTap,
+    required Color primary,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? primary.withValues(alpha: 0.22) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: isSelected ? primary : Colors.grey),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                color: isSelected ? Colors.white : Colors.grey,
+              ),
+            ),
+          ],
+        ),
       ),
-      side: BorderSide(
-        color: isSelected ? activeColor : Colors.white12,
-        width: isSelected ? 1.5 : 1,
-      ),
-      onSelected: (selected) {
-        if (selected) {
-          setState(() {
-            _selectedStatus = status;
-            _applyFilter();
-          });
-        }
+    );
+  }
+
+  Widget _buildAuthorCard(AuthorData author, Color primary, Color cardBg) {
+    final hasCover = author.coverPath != null && File(author.coverPath!).existsSync();
+
+    return InkWell(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (ctx) => AuthorDetailScreen(
+              author: author,
+              settings: _settings,
+              onAuthorUpdated: _loadData,
+            ),
+          ),
+        );
       },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        decoration: BoxDecoration(
+          color: cardBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Картинка автора: первая страница из последнего добавленного архива
+              Expanded(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (hasCover)
+                      Image.file(
+                        File(author.coverPath!),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _buildFallbackCover(primary),
+                      )
+                    else
+                      Container(
+                        color: const Color(0xFF1E222B),
+                        child: Center(
+                          child: Icon(Icons.person_rounded, size: 48, color: primary.withValues(alpha: 0.5)),
+                        ),
+                      ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 60,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.bottomCenter,
+                            end: Alignment.topCenter,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.8),
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.75),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${author.totalMangaCount} тайтл(ов)',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Информация об авторе
+              Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      author.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+
+                    // Теги автора
+                    if (author.tags.isNotEmpty)
+                      SizedBox(
+                        height: 18,
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          children: author.tags.map((tag) {
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Text(
+                                '#$tag',
+                                style: TextStyle(
+                                  color: primary,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      )
+                    else
+                      Text(
+                        'Нажмите, чтобы открыть тайтлы',
+                        style: TextStyle(
+                          color: Colors.grey.withValues(alpha: 0.8),
+                          fontSize: 10,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

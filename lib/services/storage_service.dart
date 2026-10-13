@@ -41,6 +41,7 @@ class StorageService {
   static const String _keySettings = 'nemanga_reader_settings';
   static const String _keyRecentBooks = 'nemanga_recent_books';
   static const String _keyMangaGroups = 'nemanga_manga_groups';
+  static const String _keyAuthorsTags = 'nemanga_authors_tags';
 
   /// Загрузка сохранённых настроек ридера
   static Future<ReaderSettings> loadSettings() async {
@@ -369,6 +370,88 @@ class StorageService {
 
   static Future<void> removeBook(String filePath) async {
     await removeMangaGroup(filePath);
+  }
+
+  /// Загрузить сохраненные теги для всех авторов
+  static Future<Map<String, List<String>>> loadAllAuthorTags() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(_keyAuthorsTags);
+    if (jsonStr == null || jsonStr.isEmpty) return {};
+    try {
+      final Map<String, dynamic> decoded = json.decode(jsonStr);
+      return decoded.map((k, v) => MapEntry(k, List<String>.from(v ?? [])));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Сохранить теги жанров конкретного автора
+  static Future<void> saveAuthorTags(String authorName, List<String> tags) async {
+    final cleanName = authorName.trim();
+    if (cleanName.isEmpty) return;
+    final all = await loadAllAuthorTags();
+    all[cleanName] = tags;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyAuthorsTags, json.encode(all));
+  }
+
+  /// Агрегировать список авторов со всеми тайтлами, обложками и тегами
+  static List<AuthorData> buildAuthorsList({
+    required List<MangaGroup> allGroups,
+    required Map<String, List<String>> authorTagsMap,
+  }) {
+    final allTitles = allGroups.map((g) => g.title).toList();
+    final groupsByAuthor = <String, List<MangaGroup>>{};
+
+    for (final group in allGroups) {
+      var authorName = group.displayAuthor(allTitles);
+      if (authorName.trim().isEmpty) {
+        authorName = 'Неизвестный автор';
+      } else {
+        authorName = authorName.trim();
+      }
+      groupsByAuthor.putIfAbsent(authorName, () => []).add(group);
+    }
+
+    final result = <AuthorData>[];
+    for (final entry in groupsByAuthor.entries) {
+      final authorName = entry.key;
+      final manga = List<MangaGroup>.from(entry.value);
+
+      // Сортируем тайтлы автора по дате добавления (свежие сверху)
+      manga.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+      // Картинка автора: первая страница из последнего добавленного архива
+      String? cover;
+      for (final m in manga) {
+        if (m.coverPath != null && m.coverPath!.isNotEmpty) {
+          cover = m.coverPath;
+          break;
+        }
+        if (m.chapters.isNotEmpty) {
+          cover = m.chapters.first.filePath;
+          break;
+        }
+      }
+
+      final tags = authorTagsMap[authorName] ?? [];
+
+      result.add(AuthorData(
+        name: authorName,
+        tags: tags,
+        coverPath: cover,
+        mangaList: manga,
+      ));
+    }
+
+    // Сортировка авторов по алфавиту (неизвестный автор в конце)
+    result.sort((a, b) {
+      if (a.name == 'Неизвестный автор') return 1;
+      if (b.name == 'Неизвестный автор') return -1;
+      return ArchiveService.naturalCompare(a.name, b.name);
+    });
+
+    return result;
   }
 
   static Future<void> clearHistory() async {
