@@ -104,6 +104,8 @@ class _HomeScreenState extends State<HomeScreen> {
         .where((t) => t.isNotEmpty)
         .toList();
 
+    final allTitles = _allGroups.map((g) => g.title).toList();
+
     _filteredGroups = _allGroups.where((group) {
       final matchesStatus = _selectedStatus == null || group.status == _selectedStatus;
       if (!matchesStatus) return false;
@@ -111,12 +113,14 @@ class _HomeScreenState extends State<HomeScreen> {
       if (tokens.isEmpty) return true;
 
       final titleLower = group.title.toLowerCase();
+      final authorLower = group.displayAuthor(allTitles).toLowerCase();
       final tagsLower = group.tags.map((t) => t.toLowerCase()).toList();
 
       return tokens.every((token) {
         final matchesTitle = titleLower.contains(token);
+        final matchesAuthor = authorLower.contains(token);
         final matchesTag = tagsLower.any((tag) => tag.contains(token));
-        return matchesTitle || matchesTag;
+        return matchesTitle || matchesAuthor || matchesTag;
       });
     }).toList();
 
@@ -130,6 +134,17 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
       case LibrarySortOrder.progress:
         _filteredGroups.sort((a, b) => b.overallProgressPercent.compareTo(a.overallProgressPercent));
+        break;
+      case LibrarySortOrder.author:
+        _filteredGroups.sort((a, b) {
+          final authorA = a.displayAuthor(allTitles);
+          final authorB = b.displayAuthor(allTitles);
+          if (authorA.isEmpty && authorB.isNotEmpty) return 1;
+          if (authorA.isNotEmpty && authorB.isEmpty) return -1;
+          final cmp = ArchiveService.naturalCompare(authorA, authorB);
+          if (cmp != 0) return cmp;
+          return ArchiveService.naturalCompare(a.title, b.title);
+        });
         break;
     }
   }
@@ -295,9 +310,11 @@ class _HomeScreenState extends State<HomeScreen> {
           ));
         }
 
+        final author = AuthorDetector.detectAuthor(groupTitle);
         final newGroup = MangaGroup(
           id: 'group_${DateTime.now().millisecondsSinceEpoch}',
           title: groupTitle,
+          author: author,
           coverPath: groupCover,
           status: ReadingStatus.reading,
           chapters: chapters,
@@ -1388,6 +1405,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 book: BookMetadata(
                                   filePath: group.id,
                                   title: group.title,
+                                  author: group.author,
                                   totalPages: group.totalPages,
                                   lastPage: 0,
                                   lastReadTime: group.updatedAt,
@@ -1488,6 +1506,27 @@ class _HomeScreenState extends State<HomeScreen> {
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
                         ),
+                      ),
+                      Builder(
+                        builder: (context) {
+                          final author = group.displayAuthor(_allGroups.map((g) => g.title));
+                          if (author.isNotEmpty) {
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                author,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: primary,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            );
+                          }
+                          return const SizedBox.shrink();
+                        },
                       ),
                       const SizedBox(height: 4),
 

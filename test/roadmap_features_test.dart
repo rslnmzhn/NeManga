@@ -49,6 +49,7 @@ void main() {
       expect(LibrarySortOrder.recent.label, 'Недавние');
       expect(LibrarySortOrder.title.label, 'По названию (А–Я)');
       expect(LibrarySortOrder.progress.label, 'По прогрессу');
+      expect(LibrarySortOrder.author.label, 'По автору');
     });
 
     test('StorageStats formatting', () {

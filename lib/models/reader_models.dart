@@ -109,6 +109,7 @@ enum LibrarySortOrder {
   recent,   // По недавнему чтению
   title,    // По алфавиту (А–Я)
   progress, // По проценту прочтения
+  author,   // По автору
 }
 
 extension LibrarySortOrderExt on LibrarySortOrder {
@@ -120,6 +121,8 @@ extension LibrarySortOrderExt on LibrarySortOrder {
         return 'По названию (А–Я)';
       case LibrarySortOrder.progress:
         return 'По прогрессу';
+      case LibrarySortOrder.author:
+        return 'По автору';
     }
   }
 }
@@ -341,10 +344,95 @@ class ChapterItem {
   }
 }
 
+/// Помощник для автоматической каталогизации и извлечения авторов манги
+class AuthorDetector {
+  static const Set<String> _ignoreTokens = {
+    'manga', 'manhwa', 'manhua', 'comic', 'comics', 'raw', 'eng', 'rus',
+    'ru', 'en', 'cbr', 'cbz', 'zip', 'pdf', 'vol', 'volume', 'ch', 'chapter',
+    'digital', '1080p', 'complete', 'ongoing', 'webtoon'
+  };
+
+  /// Автоматическое определение автора из заголовка манги
+  static String? detectAuthor(String title, [Iterable<String>? allLibraryTitles]) {
+    final clean = title.trim();
+    if (clean.isEmpty) return null;
+
+    // 1. Паттерн скобок в начале: [Автор] Название или (Автор) Название или 【Автор】 Название
+    final bracketMatch = RegExp(r'^\s*[\[\(\【\{]([^\]\)\】\}]+)[\]\)\】\}]').firstMatch(clean);
+    if (bracketMatch != null) {
+      final candidate = bracketMatch.group(1)?.trim();
+      if (candidate != null && candidate.isNotEmpty && candidate.length >= 2) {
+        final lower = candidate.toLowerCase();
+        final isVolOrCh = RegExp(r'^(vol|volume|том|ch|chapter|глава|\d+)', caseSensitive: false).hasMatch(lower);
+        if (!isVolOrCh && !_ignoreTokens.contains(lower)) {
+          return candidate;
+        }
+      }
+    }
+
+    // 2. Паттерн разделителя: "Автор - Название" (но не "Том 1 - Глава 2")
+    if (clean.contains(' - ')) {
+      final parts = clean.split(' - ');
+      if (parts.length >= 2) {
+        final prefix = parts[0].trim();
+        final lower = prefix.toLowerCase();
+        final isVolOrCh = RegExp(r'^(vol|volume|том|ch|chapter|глава|\d+)', caseSensitive: false).hasMatch(lower);
+        if (!isVolOrCh && prefix.isNotEmpty && prefix.length >= 2 && prefix.length <= 40) {
+          return prefix;
+        }
+      }
+    }
+
+    // 3. Отслеживание повторяющихся первых слов / префиксов среди всех тайтлов библиотеки
+    if (allLibraryTitles != null && allLibraryTitles.length >= 2) {
+      final commonAuthor = _findCommonPrefixAuthor(clean, allLibraryTitles);
+      if (commonAuthor != null && commonAuthor.isNotEmpty) {
+        return commonAuthor;
+      }
+    }
+
+    return null;
+  }
+
+  /// Поиск общего автора/префикса из повторяющихся слов в библиотеке
+  static String? _findCommonPrefixAuthor(String title, Iterable<String> allTitles) {
+    final words = title.trim().split(RegExp(r'\s+'));
+    if (words.length < 2) return null;
+
+    final maxLen = words.length >= 3 ? 3 : words.length - 1;
+    for (int len = maxLen; len >= 1; len--) {
+      final prefixWords = words.take(len).join(' ').trim();
+      if (prefixWords.length < 3) continue;
+      final lowerPrefix = prefixWords.toLowerCase();
+
+      if (RegExp(r'^(vol|volume|том|ch|chapter|глава|\d+)', caseSensitive: false).hasMatch(lowerPrefix)) {
+        continue;
+      }
+
+      int count = 0;
+      for (final other in allTitles) {
+        if (other == title) continue;
+        final otherLower = other.trim().toLowerCase();
+        if (otherLower.startsWith(lowerPrefix) ||
+            otherLower.contains('[$lowerPrefix]') ||
+            otherLower.contains('($lowerPrefix)')) {
+          count++;
+        }
+      }
+
+      if (count >= 1) {
+        return prefixWords;
+      }
+    }
+    return null;
+  }
+}
+
 /// Группа / Тайтл манги (содержит одну или несколько глав-архивов)
 class MangaGroup {
   final String id;
   final String title;
+  final String? author;
   final String? coverPath;
   final ReadingStatus status;
   final List<String> tags;
@@ -355,6 +443,7 @@ class MangaGroup {
   MangaGroup({
     required this.id,
     required this.title,
+    this.author,
     this.coverPath,
     this.status = ReadingStatus.reading,
     this.tags = const [],
@@ -362,6 +451,14 @@ class MangaGroup {
     this.currentChapterIndex = 0,
     required this.updatedAt,
   });
+
+  /// Получить автора манги (явно заданного или извлеченного из названия)
+  String displayAuthor([Iterable<String>? allLibraryTitles]) {
+    if (author != null && author!.trim().isNotEmpty) {
+      return author!.trim();
+    }
+    return AuthorDetector.detectAuthor(title, allLibraryTitles) ?? '';
+  }
 
   int get totalSize => chapters.fold(0, (sum, c) => sum + c.fileSize);
   int get totalPages => chapters.fold(0, (sum, c) => sum + c.totalPages);
@@ -394,6 +491,7 @@ class MangaGroup {
   MangaGroup copyWith({
     String? id,
     String? title,
+    String? author,
     String? coverPath,
     ReadingStatus? status,
     List<String>? tags,
@@ -404,6 +502,7 @@ class MangaGroup {
     return MangaGroup(
       id: id ?? this.id,
       title: title ?? this.title,
+      author: author ?? this.author,
       coverPath: coverPath ?? this.coverPath,
       status: status ?? this.status,
       tags: tags ?? this.tags,
@@ -417,6 +516,7 @@ class MangaGroup {
     return {
       'id': id,
       'title': title,
+      if (author != null) 'author': author,
       'coverPath': coverPath,
       'status': status.index,
       'tags': tags,
@@ -430,6 +530,7 @@ class MangaGroup {
     return MangaGroup(
       id: map['id'] ?? '',
       title: map['title'] ?? '',
+      author: map['author'] as String?,
       coverPath: map['coverPath'],
       status: ReadingStatus.values[(map['status'] ?? 1).clamp(0, ReadingStatus.values.length - 1)],
       tags: (map['tags'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
@@ -453,6 +554,7 @@ class MangaGroup {
 class BookMetadata {
   final String filePath;
   final String title;
+  final String? author;
   final int totalPages;
   final int lastPage;
   final DateTime lastReadTime;
@@ -465,6 +567,7 @@ class BookMetadata {
   BookMetadata({
     required this.filePath,
     required this.title,
+    this.author,
     required this.totalPages,
     required this.lastPage,
     required this.lastReadTime,
@@ -478,6 +581,7 @@ class BookMetadata {
   BookMetadata copyWith({
     String? filePath,
     String? title,
+    String? author,
     int? totalPages,
     int? lastPage,
     DateTime? lastReadTime,
@@ -490,6 +594,7 @@ class BookMetadata {
     return BookMetadata(
       filePath: filePath ?? this.filePath,
       title: title ?? this.title,
+      author: author ?? this.author,
       totalPages: totalPages ?? this.totalPages,
       lastPage: lastPage ?? this.lastPage,
       lastReadTime: lastReadTime ?? this.lastReadTime,
@@ -515,6 +620,7 @@ class BookMetadata {
     return MangaGroup(
       id: filePath,
       title: title,
+      author: author,
       coverPath: coverPath,
       status: status,
       tags: tags,
@@ -528,6 +634,7 @@ class BookMetadata {
     return {
       'filePath': filePath,
       'title': title,
+      if (author != null) 'author': author,
       'totalPages': totalPages,
       'lastPage': lastPage,
       'lastReadTime': lastReadTime.millisecondsSinceEpoch,
@@ -543,6 +650,7 @@ class BookMetadata {
     return BookMetadata(
       filePath: map['filePath'] ?? '',
       title: map['title'] ?? '',
+      author: map['author'] as String?,
       totalPages: map['totalPages'] ?? 0,
       lastPage: map['lastPage'] ?? 0,
       lastReadTime: DateTime.fromMillisecondsSinceEpoch(

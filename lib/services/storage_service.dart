@@ -207,9 +207,11 @@ class StorageService {
       fileSize: fileSize,
     );
 
+    final author = AuthorDetector.detectAuthor(title);
     final newGroup = MangaGroup(
       id: filePath,
       title: title,
+      author: author,
       coverPath: coverPath,
       status: ReadingStatus.reading,
       chapters: [newChapter],
@@ -354,6 +356,7 @@ class StorageService {
       final existing = groups[idx];
       final updatedGroup = existing.copyWith(
         title: updated.title,
+        author: updated.author,
         tags: updated.tags,
         status: updated.status,
         updatedAt: DateTime.now(),
@@ -469,9 +472,11 @@ class StorageService {
       if (existingIdx != -1) {
         await addChaptersToGroup(groupId: existingGroups[existingIdx].id, newChapters: chapters);
       } else {
+        final author = AuthorDetector.detectAuthor(title);
         final newGroup = MangaGroup(
           id: 'group_${DateTime.now().millisecondsSinceEpoch}_$importedCount',
           title: title,
+          author: author,
           coverPath: cover,
           status: ReadingStatus.reading,
           chapters: chapters,

@@ -361,6 +361,27 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
+                                  if (_manga.displayAuthor().isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        Icon(Icons.person_outline_rounded, size: 14, color: primary),
+                                        const SizedBox(width: 4),
+                                        Expanded(
+                                          child: Text(
+                                            _manga.displayAuthor(),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              color: primary,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                   const SizedBox(height: 8),
 
                                   // Селектор статуса (Читаю, В планах, Прочитано)
@@ -428,6 +449,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                         book: BookMetadata(
                           filePath: _manga.id,
                           title: _manga.title,
+                          author: _manga.author,
                           totalPages: _manga.totalPages,
                           lastPage: 0,
                           lastReadTime: _manga.updatedAt,
@@ -686,23 +708,40 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
         onTap: () => _openChapter(chapter, index),
-        leading: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: chapter.isCompleted ? Colors.green.withValues(alpha: 0.2) : Colors.white12,
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: chapter.isCompleted
-                ? const Icon(Icons.check, color: Colors.greenAccent, size: 20)
-                : Text(
-                    '${index + 1}',
-                    style: TextStyle(
-                      color: isCurrent ? primary : Colors.white70,
-                      fontWeight: FontWeight.bold,
-                    ),
+        leading: SizedBox(
+          width: 44,
+          height: 60,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              MangaArchiveThumbnail(
+                archivePath: chapter.filePath,
+                width: 44,
+                height: 60,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              Positioned(
+                bottom: 2,
+                right: 2,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.8),
+                    borderRadius: BorderRadius.circular(4),
                   ),
+                  child: chapter.isCompleted
+                      ? const Icon(Icons.check, size: 11, color: Colors.greenAccent)
+                      : Text(
+                          '${index + 1}',
+                          style: TextStyle(
+                            color: isCurrent ? primary : Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                ),
+              ),
+            ],
           ),
         ),
         title: Text(

@@ -7,6 +7,7 @@ import '../models/reader_models.dart';
 import '../services/archive_service.dart';
 import '../services/storage_service.dart';
 import '../widgets/reader_settings_sheet.dart';
+import 'manga_file_explorer_screen.dart';
 
 class _ImageDimensionHelper {
   static (int, int)? getImageDimensions(String filePath) {
@@ -1117,6 +1118,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       selected: isCurrent,
                       selectedTileColor: Theme.of(context).colorScheme.primary.withOpacity(0.12),
+                      leading: SizedBox(
+                        width: 36,
+                        height: 48,
+                        child: MangaArchiveThumbnail(
+                          archivePath: ch.filePath,
+                          width: 36,
+                          height: 48,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
                       title: Text(
                         ch.title,
                         style: TextStyle(

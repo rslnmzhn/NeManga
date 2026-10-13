@@ -29,6 +29,7 @@ class EditBookDialog extends StatefulWidget {
 
 class _EditBookDialogState extends State<EditBookDialog> {
   late TextEditingController _titleController;
+  late TextEditingController _authorController;
   final TextEditingController _tagInputController = TextEditingController();
   late List<String> _tags;
   late ReadingStatus _status;
@@ -65,6 +66,9 @@ class _EditBookDialogState extends State<EditBookDialog> {
   void initState() {
     super.initState();
     _titleController = TextEditingController(text: widget.book.title);
+    _authorController = TextEditingController(
+      text: widget.book.author ?? AuthorDetector.detectAuthor(widget.book.title) ?? '',
+    );
     _tags = List.from(widget.book.tags);
     _status = widget.book.status;
     _loadLibraryTags();
@@ -82,6 +86,7 @@ class _EditBookDialogState extends State<EditBookDialog> {
   @override
   void dispose() {
     _titleController.dispose();
+    _authorController.dispose();
     _tagInputController.dispose();
     super.dispose();
   }
@@ -112,8 +117,10 @@ class _EditBookDialogState extends State<EditBookDialog> {
 
   Future<void> _save() async {
     final newTitle = _titleController.text.trim();
+    final newAuthor = _authorController.text.trim();
     final updated = widget.book.copyWith(
       title: newTitle.isNotEmpty ? newTitle : widget.book.title,
+      author: newAuthor.isNotEmpty ? newAuthor : null,
       tags: _tags,
       status: _status,
     );
@@ -156,6 +163,47 @@ class _EditBookDialogState extends State<EditBookDialog> {
               controller: _titleController,
               decoration: InputDecoration(
                 hintText: 'Введите название',
+                filled: true,
+                fillColor: const Color(0xFF242833),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // Автор / Мангака
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Автор / Мангака',
+                  style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w600),
+                ),
+                if (_authorController.text.isEmpty)
+                  InkWell(
+                    onTap: () {
+                      final detected = AuthorDetector.detectAuthor(_titleController.text);
+                      if (detected != null) {
+                        setState(() {
+                          _authorController.text = detected;
+                        });
+                      }
+                    },
+                    child: Text(
+                      'Автоопределение',
+                      style: TextStyle(fontSize: 11, color: primary, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _authorController,
+              decoration: InputDecoration(
+                hintText: 'Укажите автора манги',
                 filled: true,
                 fillColor: const Color(0xFF242833),
                 border: OutlineInputBorder(
