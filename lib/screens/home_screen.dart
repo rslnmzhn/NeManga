@@ -37,6 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isAuthorsView = false;
   bool _showSizeInsteadOfCount = false;
   List<AuthorData> _authorsList = [];
+  List<String> _authorBlacklist = [];
 
   @override
   void initState() {
@@ -90,9 +91,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final settings = await StorageService.loadSettings();
     final groups = await StorageService.getMangaGroups();
     final authorTags = await StorageService.loadAllAuthorTags();
+    final blacklist = await StorageService.loadAuthorBlacklist();
     final authors = StorageService.buildAuthorsList(
       allGroups: groups,
       authorTagsMap: authorTags,
+      blacklist: blacklist,
     );
 
     if (mounted) {
@@ -100,6 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _settings = settings;
         _allGroups = groups;
         _authorsList = authors;
+        _authorBlacklist = blacklist;
         _applyFilter();
       });
     }
@@ -123,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (tokens.isEmpty) return true;
 
       final titleLower = group.title.toLowerCase();
-      final authorLower = group.displayAuthor(allTitles).toLowerCase();
+      final authorLower = group.displayAuthor(allTitles, _authorBlacklist).toLowerCase();
       final tagsLower = group.tags.map((t) => t.toLowerCase()).toList();
 
       return tokens.every((token) {
@@ -147,8 +151,8 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
       case LibrarySortOrder.author:
         _filteredGroups.sort((a, b) {
-          final authorA = a.displayAuthor(allTitles);
-          final authorB = b.displayAuthor(allTitles);
+          final authorA = a.displayAuthor(allTitles, _authorBlacklist);
+          final authorB = b.displayAuthor(allTitles, _authorBlacklist);
           if (authorA.isEmpty && authorB.isNotEmpty) return 1;
           if (authorA.isNotEmpty && authorB.isEmpty) return -1;
           final cmp = ArchiveService.naturalCompare(authorA, authorB);
@@ -746,6 +750,190 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _showAuthorBlacklistDialog() {
+    final textController = TextEditingController();
+    final currentBlacklist = List<String>.from(_authorBlacklist);
+    final primary = _settings.accentColor.color;
+
+    const suggestions = [
+      'author-*',
+      'mangalib*',
+      'remanga*',
+      'readmanga*',
+      'slashlib*',
+      '*scan*',
+      '*team*',
+      '*club*',
+    ];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Row(
+              children: [
+                Icon(Icons.edit_note_rounded, color: Colors.amber, size: 24),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Блэклист слов и авторов',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Исключите названия сайтов, сканы и мусорные префиксы из списка авторов. Поддерживается знак * (например: author-*, [site]*, *scan*).',
+                    style: TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: textController,
+                          onSubmitted: (val) {
+                            final parts = val
+                                .split(RegExp(r'[\s,]+'))
+                                .map((s) => s.trim())
+                                .where((s) => s.isNotEmpty);
+                            if (parts.isNotEmpty) {
+                              setDialogState(() {
+                                for (final p in parts) {
+                                  if (!currentBlacklist.contains(p)) {
+                                    currentBlacklist.add(p);
+                                  }
+                                }
+                              });
+                              textController.clear();
+                            }
+                          },
+                          decoration: InputDecoration(
+                            hintText: 'Шаблон (напр. author-*, site*)...',
+                            hintStyle: const TextStyle(fontSize: 12),
+                            filled: true,
+                            fillColor: const Color(0xFF242833),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none,
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        style: IconButton.styleFrom(
+                          backgroundColor: primary,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () {
+                          final val = textController.text;
+                          final parts = val
+                              .split(RegExp(r'[\s,]+'))
+                              .map((s) => s.trim())
+                              .where((s) => s.isNotEmpty);
+                          if (parts.isNotEmpty) {
+                            setDialogState(() {
+                              for (final p in parts) {
+                                if (!currentBlacklist.contains(p)) {
+                                  currentBlacklist.add(p);
+                                }
+                              }
+                            });
+                            textController.clear();
+                          }
+                        },
+                        icon: const Icon(Icons.add, size: 20),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (currentBlacklist.isNotEmpty) ...[
+                    const Text(
+                      'Активные правила исключения:',
+                      style: TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: currentBlacklist.map((rule) {
+                        return Chip(
+                          backgroundColor: Colors.redAccent.withValues(alpha: 0.15),
+                          side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.3)),
+                          label: Text(
+                            rule,
+                            style: const TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                          deleteIcon: const Icon(Icons.close, size: 14, color: Colors.redAccent),
+                          onDeleted: () {
+                            setDialogState(() {
+                              currentBlacklist.remove(rule);
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  const Text(
+                    'Быстрые подсказки:',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: suggestions.where((s) => !currentBlacklist.contains(s)).map((s) {
+                      return ActionChip(
+                        label: Text(s, style: const TextStyle(fontSize: 11)),
+                        backgroundColor: Colors.white.withValues(alpha: 0.06),
+                        side: BorderSide.none,
+                        onPressed: () {
+                          setDialogState(() {
+                            currentBlacklist.add(s);
+                          });
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Отмена', style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  await StorageService.saveAuthorBlacklist(currentBlacklist);
+                  await _loadData();
+                },
+                child: const Text('Сохранить'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   void _showSortDialog() {
     showDialog(
       context: context,
@@ -1042,25 +1230,33 @@ class _HomeScreenState extends State<HomeScreen> {
                                     style: const TextStyle(fontSize: 13, color: Colors.grey),
                                   ),
                                 const SizedBox(width: 4),
-                                IconButton(
-                                  icon: Badge(
-                                    isLabelVisible: _selectedStatus != null,
-                                    child: Icon(
-                                      Icons.filter_list_rounded,
-                                      size: 20,
-                                      color: _selectedStatus != null ? primary : Colors.white70,
+                                if (_isAuthorsView)
+                                  IconButton(
+                                    icon: const Icon(Icons.edit_note_rounded, size: 22, color: Colors.amber),
+                                    tooltip: 'Фильтры и блэклист авторов',
+                                    onPressed: _showAuthorBlacklistDialog,
+                                  )
+                                else ...[
+                                  IconButton(
+                                    icon: Badge(
+                                      isLabelVisible: _selectedStatus != null,
+                                      child: Icon(
+                                        Icons.filter_list_rounded,
+                                        size: 20,
+                                        color: _selectedStatus != null ? primary : Colors.white70,
+                                      ),
                                     ),
+                                    tooltip: _selectedStatus != null
+                                        ? 'Фильтр: ${_selectedStatus!.label}'
+                                        : 'Фильтры статуса',
+                                    onPressed: _showFilterDialog,
                                   ),
-                                  tooltip: _selectedStatus != null
-                                      ? 'Фильтр: ${_selectedStatus!.label}'
-                                      : 'Фильтры статуса',
-                                  onPressed: _showFilterDialog,
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.sort_rounded, size: 20, color: Colors.white70),
-                                  tooltip: 'Сортировка: ${_settings.sortOrder.label}',
-                                  onPressed: _showSortDialog,
-                                ),
+                                  IconButton(
+                                    icon: const Icon(Icons.sort_rounded, size: 20, color: Colors.white70),
+                                    tooltip: 'Сортировка: ${_settings.sortOrder.label}',
+                                    onPressed: _showSortDialog,
+                                  ),
+                                ],
                               ],
                             ),
                           ],
@@ -1780,7 +1976,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       Builder(
                         builder: (context) {
-                          final author = group.displayAuthor(_allGroups.map((g) => g.title));
+                          final author = group.displayAuthor(_allGroups.map((g) => g.title), _authorBlacklist);
                           if (author.isNotEmpty) {
                             return Padding(
                               padding: const EdgeInsets.only(top: 2),

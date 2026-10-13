@@ -190,5 +190,32 @@ void main() {
       expect(author.totalMangaCount, 2);
       expect(author.coverPath, '/tmp/cover_punpun.jpg'); // taken from latest added manga!
     });
+
+    test('Author blacklist filtering with wildcards', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      // Pattern author-* should match author-site, author-123
+      expect(AuthorDetector.matchesBlacklist('author-site', ['author-*']), isTrue);
+      expect(AuthorDetector.matchesBlacklist('author-123', ['author-*']), isTrue);
+      expect(AuthorDetector.matchesBlacklist('real_author', ['author-*']), isFalse);
+
+      // Pattern site* should match site.com
+      expect(AuthorDetector.matchesBlacklist('site.com', ['site*']), isTrue);
+      expect(AuthorDetector.matchesBlacklist('Oda Eiichiro', ['site*']), isFalse);
+
+      // Pattern *scan* should match team_scan_group
+      expect(AuthorDetector.matchesBlacklist('team_scan_group', ['*scan*']), isTrue);
+
+      // detectAuthor skips blacklisted bracket candidates and takes real author
+      final title = '[mangalib.me] [Oda Eiichiro] One Piece';
+      final detected = AuthorDetector.detectAuthor(title, null, ['mangalib*']);
+      expect(detected, 'Oda Eiichiro');
+
+      // Persistence of blacklist
+      await StorageService.saveAuthorBlacklist(['author-*', 'mangalib*']);
+      final loaded = await StorageService.loadAuthorBlacklist();
+      expect(loaded, contains('author-*'));
+      expect(loaded, contains('mangalib*'));
+    });
   });
 }

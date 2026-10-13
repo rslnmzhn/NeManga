@@ -371,19 +371,64 @@ class AuthorDetector {
     'digital', '1080p', 'complete', 'ongoing', 'webtoon'
   };
 
-  /// Автоматическое определение автора из заголовка манги
-  static String? detectAuthor(String title, [Iterable<String>? allLibraryTitles]) {
+  /// Проверка строки кандидата на совпадение с шаблоном блеклиста (поддержка *, author-*, [site]*)
+  static bool matchesBlacklist(String candidate, [Iterable<String>? blacklist]) {
+    if (blacklist == null || blacklist.isEmpty) return false;
+    final cand = candidate.trim().toLowerCase();
+    if (cand.isEmpty) return false;
+
+    for (final rawPattern in blacklist) {
+      final pattern = rawPattern.trim().toLowerCase();
+      if (pattern.isEmpty) continue;
+
+      if (pattern == '*') return true;
+
+      if (pattern.contains('*')) {
+        try {
+          final escaped = RegExp.escape(pattern).replaceAll(r'\*', '.*');
+          final regex = RegExp('^$escaped\\\$', caseSensitive: false);
+          if (regex.hasMatch(cand)) return true;
+        } catch (_) {}
+
+        if (pattern.endsWith('*') && !pattern.startsWith('*')) {
+          final prefix = pattern.substring(0, pattern.length - 1);
+          if (cand.startsWith(prefix)) return true;
+        } else if (pattern.startsWith('*') && !pattern.endsWith('*')) {
+          final suffix = pattern.substring(1);
+          if (cand.endsWith(suffix)) return true;
+        } else if (pattern.startsWith('*') && pattern.endsWith('*')) {
+          final middle = pattern.substring(1, pattern.length - 1);
+          if (cand.contains(middle)) return true;
+        }
+      } else {
+        if (cand == pattern ||
+            cand.startsWith('$pattern-') ||
+            cand.startsWith('${pattern}_') ||
+            cand.startsWith('$pattern.')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Автоматическое определение автора из заголовка манги с учетом блеклиста
+  static String? detectAuthor(
+    String title, [
+    Iterable<String>? allLibraryTitles,
+    Iterable<String>? blacklist,
+  ]) {
     final clean = title.trim();
     if (clean.isEmpty) return null;
 
-    // 1. Паттерн скобок в начале: [Автор] Название или (Автор) Название или 【Автор】 Название
-    final bracketMatch = RegExp(r'^\s*[\[\(\【\{]([^\]\)\】\}]+)[\]\)\】\}]').firstMatch(clean);
-    if (bracketMatch != null) {
-      final candidate = bracketMatch.group(1)?.trim();
+    // 1. Паттерны скобок: [Автор] Название или (Автор) Название или 【Автор】 Название
+    final bracketMatches = RegExp(r'[\[\(\【\{]([^\]\)\】\}]+)[\]\)\】\}]').allMatches(clean);
+    for (final match in bracketMatches) {
+      final candidate = match.group(1)?.trim();
       if (candidate != null && candidate.isNotEmpty && candidate.length >= 2) {
         final lower = candidate.toLowerCase();
         final isVolOrCh = RegExp(r'^(vol|volume|том|ch|chapter|глава|\d+)', caseSensitive: false).hasMatch(lower);
-        if (!isVolOrCh && !_ignoreTokens.contains(lower)) {
+        if (!isVolOrCh && !_ignoreTokens.contains(lower) && !matchesBlacklist(candidate, blacklist)) {
           return candidate;
         }
       }
@@ -397,16 +442,20 @@ class AuthorDetector {
         final lower = prefix.toLowerCase();
         final isVolOrCh = RegExp(r'^(vol|volume|том|ch|chapter|глава|\d+)', caseSensitive: false).hasMatch(lower);
         if (!isVolOrCh && prefix.isNotEmpty && prefix.length >= 2 && prefix.length <= 40) {
-          return prefix;
+          if (!matchesBlacklist(prefix, blacklist)) {
+            return prefix;
+          }
         }
       }
     }
 
     // 3. Отслеживание повторяющихся первых слов / префиксов среди всех тайтлов библиотеки
     if (allLibraryTitles != null && allLibraryTitles.length >= 2) {
-      final commonAuthor = _findCommonPrefixAuthor(clean, allLibraryTitles);
+      final commonAuthor = _findCommonPrefixAuthor(clean, allLibraryTitles, blacklist);
       if (commonAuthor != null && commonAuthor.isNotEmpty) {
-        return commonAuthor;
+        if (!matchesBlacklist(commonAuthor, blacklist)) {
+          return commonAuthor;
+        }
       }
     }
 
@@ -414,7 +463,11 @@ class AuthorDetector {
   }
 
   /// Поиск общего автора/префикса из повторяющихся слов в библиотеке
-  static String? _findCommonPrefixAuthor(String title, Iterable<String> allTitles) {
+  static String? _findCommonPrefixAuthor(
+    String title,
+    Iterable<String> allTitles, [
+    Iterable<String>? blacklist,
+  ]) {
     final words = title.trim().split(RegExp(r'\s+'));
     if (words.length < 2) return null;
 
@@ -425,6 +478,10 @@ class AuthorDetector {
       final lowerPrefix = prefixWords.toLowerCase();
 
       if (RegExp(r'^(vol|volume|том|ch|chapter|глава|\d+)', caseSensitive: false).hasMatch(lowerPrefix)) {
+        continue;
+      }
+
+      if (matchesBlacklist(prefixWords, blacklist)) {
         continue;
       }
 
@@ -472,11 +529,15 @@ class MangaGroup {
   });
 
   /// Получить автора манги (явно заданного или извлеченного из названия)
-  String displayAuthor([Iterable<String>? allLibraryTitles]) {
+  String displayAuthor([Iterable<String>? allLibraryTitles, Iterable<String>? blacklist]) {
     if (author != null && author!.trim().isNotEmpty) {
-      return author!.trim();
+      final explicit = author!.trim();
+      if (AuthorDetector.matchesBlacklist(explicit, blacklist)) {
+        return '';
+      }
+      return explicit;
     }
-    return AuthorDetector.detectAuthor(title, allLibraryTitles) ?? '';
+    return AuthorDetector.detectAuthor(title, allLibraryTitles, blacklist) ?? '';
   }
 
   int get totalSize => chapters.fold(0, (sum, c) => sum + c.fileSize);

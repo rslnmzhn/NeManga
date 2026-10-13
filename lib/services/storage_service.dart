@@ -42,6 +42,7 @@ class StorageService {
   static const String _keyRecentBooks = 'nemanga_recent_books';
   static const String _keyMangaGroups = 'nemanga_manga_groups';
   static const String _keyAuthorsTags = 'nemanga_authors_tags';
+  static const String _keyAuthorBlacklist = 'nemanga_author_blacklist';
 
   /// Загрузка сохранённых настроек ридера
   static Future<ReaderSettings> loadSettings() async {
@@ -395,17 +396,35 @@ class StorageService {
     await prefs.setString(_keyAuthorsTags, json.encode(all));
   }
 
+  /// Загрузить блеклист авторов и шаблонов слов
+  static Future<List<String>> loadAuthorBlacklist() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_keyAuthorBlacklist) ?? [];
+  }
+
+  /// Сохранить блеклист авторов и шаблонов слов
+  static Future<void> saveAuthorBlacklist(List<String> list) async {
+    final prefs = await SharedPreferences.getInstance();
+    final clean = list
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toSet()
+        .toList();
+    await prefs.setStringList(_keyAuthorBlacklist, clean);
+  }
+
   /// Агрегировать список авторов со всеми тайтлами, обложками и тегами
   static List<AuthorData> buildAuthorsList({
     required List<MangaGroup> allGroups,
     required Map<String, List<String>> authorTagsMap,
+    Iterable<String>? blacklist,
   }) {
     final allTitles = allGroups.map((g) => g.title).toList();
     final groupsByAuthor = <String, List<MangaGroup>>{};
 
     for (final group in allGroups) {
-      var authorName = group.displayAuthor(allTitles);
-      if (authorName.trim().isEmpty) {
+      var authorName = group.displayAuthor(allTitles, blacklist);
+      if (authorName.trim().isEmpty || AuthorDetector.matchesBlacklist(authorName, blacklist)) {
         authorName = 'Неизвестный автор';
       } else {
         authorName = authorName.trim();
