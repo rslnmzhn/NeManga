@@ -66,18 +66,20 @@ class CompressorService {
   /// Проверить наличие разрешения на доступ ко всем файлам (MANAGE_EXTERNAL_STORAGE)
   static Future<bool> hasAllFilesAccess() async {
     try {
-      if (Platform.isAndroid) {
+      if (defaultTargetPlatform == TargetPlatform.android) {
         final res = await _channel.invokeMethod<bool>('hasAllFilesAccess');
-        return res ?? true;
+        return res ?? false;
       }
-    } catch (_) {}
+    } catch (_) {
+      return false;
+    }
     return true;
   }
 
   /// Запросить у пользователя системное разрешение на доступ ко всем файлам
   static Future<bool> requestAllFilesAccess() async {
     try {
-      if (Platform.isAndroid) {
+      if (defaultTargetPlatform == TargetPlatform.android) {
         final res = await _channel.invokeMethod<bool>('requestAllFilesAccess');
         return res ?? false;
       }

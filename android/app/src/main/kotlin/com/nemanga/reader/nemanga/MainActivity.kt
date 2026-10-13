@@ -127,11 +127,17 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(publicDir.absolutePath)
                 }
+                "getDownloadsDirectory" -> {
+                    @Suppress("DEPRECATION")
+                    val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    result.success(downloads.absolutePath)
+                }
                 "hasAllFilesAccess" -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         result.success(Environment.isExternalStorageManager())
                     } else {
-                        result.success(true)
+                        result.success(Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+                            checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED)
                     }
                 }
                 "requestAllFilesAccess" -> {
@@ -152,6 +158,10 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     } else {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                                android.Manifest.permission.WRITE_EXTERNAL_STORAGE), 4101)
+                        }
                         result.success(true)
                     }
                 }

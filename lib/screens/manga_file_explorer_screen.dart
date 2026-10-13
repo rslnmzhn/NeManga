@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
 import '../services/compressor_service.dart';
@@ -169,9 +169,15 @@ class MangaFileExplorerScreen extends StatefulWidget {
 }
 
 class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with WidgetsBindingObserver {
-  late Directory _currentDirectory;
+  Directory _currentDirectory = Directory('/');
+  static const _storageChannel = MethodChannel('com.nemanga.reader/compressor');
+  String? _downloadsPath;
+  String? _directoryError;
+  int _loadRevision = 0;
+  bool _checkingAccess = false;
+  bool _requestingAccess = false;
   bool _isLoading = true;
-  bool _hasStorageAccess = true;
+  bool _hasStorageAccess = false;
 
   List<Directory> _subDirectories = [];
   List<File> _mangaFiles = [];
@@ -210,87 +216,114 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
   }
 
   Future<void> _checkPermissionAndInit() async {
-    final hasAccess = await CompressorService.hasAllFilesAccess();
-    if (!mounted) return;
-    setState(() {
-      _hasStorageAccess = hasAccess;
-    });
-
-    await _initStartDirectory();
-  }
-
-  Future<void> _initStartDirectory() async {
-    Directory targetDir;
-    if (widget.initialDirectoryPath != null &&
-        Directory(widget.initialDirectoryPath!).existsSync()) {
-      targetDir = Directory(widget.initialDirectoryPath!);
-    } else {
-      targetDir = await _getDefaultDownloadsDirectory();
-    }
-    _currentDirectory = targetDir;
-    await _loadDirectoryContents();
-  }
-
-  static Future<Directory> _getDefaultDownloadsDirectory() async {
+    if (_checkingAccess || !mounted) return;
+    _checkingAccess = true;
     try {
-      if (Platform.isAndroid) {
-        final downloadDir = Directory('/storage/emulated/0/Download');
-        if (await downloadDir.exists()) return downloadDir;
-        final rootDir = Directory('/storage/emulated/0');
-        if (await rootDir.exists()) return rootDir;
+      final hasAccess = await CompressorService.hasAllFilesAccess();
+      if (!mounted) return;
+      setState(() {
+        _hasStorageAccess = hasAccess;
+        _directoryError = null;
+      });
+      if (!hasAccess) {
+        _loadRevision++;
+        setState(() {
+          _isLoading = false;
+          _subDirectories = [];
+          _mangaFiles = [];
+          _selectedPaths.clear();
+          _isSelectionMode = false;
+        });
+        return;
       }
-    } catch (_) {}
-    return getApplicationDocumentsDirectory();
+      final path = _downloadsPath ??
+          await _storageChannel.invokeMethod<String>('getDownloadsDirectory');
+      if (path == null || path.isEmpty || !p.isAbsolute(path)) {
+        throw const FileSystemException('Android не сообщил путь к Загрузкам');
+      }
+      if (!mounted) return;
+      if (_downloadsPath == null) {
+        _currentDirectory = Directory(widget.initialDirectoryPath ?? path);
+      }
+      _downloadsPath = path;
+      await _loadDirectoryContents();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _directoryError = 'Не удалось открыть хранилище: $e';
+        });
+      }
+    } finally {
+      _checkingAccess = false;
+    }
+  }
+
+  Future<void> _requestStorageAccess() async {
+    if (_requestingAccess) return;
+    _requestingAccess = true;
+    try {
+      final opened = await CompressorService.requestAllFilesAccess();
+      if (!mounted) return;
+      if (!opened) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Не удалось открыть настройки доступа к файлам'),
+        ));
+      }
+      // Открытие настроек не означает, что пользователь выдал разрешение.
+      await _checkPermissionAndInit();
+    } finally {
+      _requestingAccess = false;
+    }
+  }
+
+  Future<void> _openDownloads() async {
+    await _checkPermissionAndInit();
+    if (!mounted) return;
+    if (!_hasStorageAccess) {
+      await _requestStorageAccess();
+      return;
+    }
+    final path = _downloadsPath;
+    if (path != null) _navigateTo(Directory(path));
   }
 
   Future<void> _loadDirectoryContents() async {
+    if (!mounted || !_hasStorageAccess) return;
+    final revision = ++_loadRevision;
+    final directory = _currentDirectory;
     setState(() {
       _isLoading = true;
+      _directoryError = null;
     });
-
     final subDirs = <Directory>[];
     final files = <File>[];
-
+    String? error;
     try {
-      if (await _currentDirectory.exists()) {
-        final entities = _currentDirectory.listSync(followLinks: false);
-        for (final entity in entities) {
-          final baseName = p.basename(entity.path);
-          if (baseName.startsWith('.')) continue; // скрытые пропускаем
-
-          if (entity is Directory) {
-            subDirs.add(entity);
-          } else if (entity is File) {
-            final ext = p.extension(entity.path).toLowerCase();
-            if (_supportedExtensions.contains(ext)) {
-              files.add(entity);
-            }
-          }
-        }
-      } else {
-        final fallback = Directory('/storage/emulated/0/Download');
-        if (await fallback.exists()) {
-          _currentDirectory = fallback;
-          return _loadDirectoryContents();
+      await for (final entity in directory.list(followLinks: false)) {
+        if (p.basename(entity.path).startsWith('.')) continue;
+        if (entity is Directory) {
+          subDirs.add(entity);
+        } else if (entity is File &&
+            _supportedExtensions.contains(p.extension(entity.path).toLowerCase())) {
+          files.add(entity);
         }
       }
+      subDirs.sort((a, b) => ArchiveService.naturalCompare(
+          p.basename(a.path), p.basename(b.path)));
+      _sortFiles(files);
     } catch (e) {
-      debugPrint('Ошибка чтения директории ${_currentDirectory.path}: $e');
+      error = 'Не удалось прочитать папку ${directory.path}: $e';
+      subDirs.clear();
+      files.clear();
     }
-
-    // Сортировка папок по алфавиту
-    subDirs.sort((a, b) => ArchiveService.naturalCompare(p.basename(a.path), p.basename(b.path)));
-
-    // Сортировка архивов по выбранному критерию
-    _sortFiles(files);
-
-    if (mounted) {
-      setState(() {
-        _subDirectories = subDirs;
-        _mangaFiles = files;
-        _isLoading = false;
-      });
-    }
+    if (!mounted || revision != _loadRevision) return;
+    setState(() {
+      _subDirectories = subDirs;
+      _mangaFiles = files;
+      _directoryError = error;
+      _isLoading = false;
+    });
   }
 
   void _sortFiles(List<File> files) {
@@ -316,6 +349,7 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
   }
 
   void _navigateTo(Directory dir) {
+    if (!mounted || !_hasStorageAccess) return;
     _currentDirectory = dir;
     _searchQuery = '';
     _searchController.clear();
@@ -510,15 +544,19 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
               onPressed: _confirmSelection,
             )
           : null,
-      body: Column(
+      body: !_hasStorageAccess
+          ? (_isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : SingleChildScrollView(child: _buildPermissionBanner(primary)))
+          : Column(
         children: [
           if (!_hasStorageAccess) _buildPermissionBanner(primary),
 
           // 1. Хлебные крошки и панель навигации по папкам
-          _buildNavigationBreadcrumbs(primary),
+          if (_downloadsPath != null) _buildNavigationBreadcrumbs(primary),
 
           // 2. Быстрые закладки папок (Downloads, NeManga, etc.)
-          _buildQuickFolderShortcuts(primary),
+          if (_downloadsPath != null) _buildQuickFolderShortcuts(primary),
 
           const Divider(height: 1, color: Colors.white12),
 
@@ -679,9 +717,7 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
               ),
               icon: const Icon(Icons.settings_suggest_rounded, size: 18),
               label: const Text('Разрешить доступ ко всем файлам'),
-              onPressed: () async {
-                await CompressorService.requestAllFilesAccess();
-              },
+              onPressed: _requestStorageAccess,
             ),
           ),
         ],
@@ -747,14 +783,7 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
                 label: const Text('В Загрузки', style: TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold)),
                 backgroundColor: Colors.amber.withValues(alpha: 0.15),
                 side: const BorderSide(color: Colors.amber),
-                onPressed: () async {
-                  final d = Directory('/storage/emulated/0/Download');
-                  if (await d.exists()) {
-                    _navigateTo(d);
-                  } else {
-                    await CompressorService.requestAllFilesAccess();
-                  }
-                },
+                onPressed: _openDownloads,
               ),
             ),
         ],
@@ -770,13 +799,13 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         children: [
-          _buildShortcutChip('📁 Downloads', '/storage/emulated/0/Download', primary),
+          _buildShortcutChip('📁 Downloads', _downloadsPath!, primary),
           const SizedBox(width: 8),
-          _buildShortcutChip('📁 NeManga', '/storage/emulated/0/Download/NeManga', primary),
+          _buildShortcutChip('📁 NeManga', p.join(_downloadsPath!, 'NeManga'), primary),
           const SizedBox(width: 8),
-          _buildShortcutChip('📁 Документы', '/storage/emulated/0/Documents', primary),
+          _buildShortcutChip('📁 Документы', p.join(p.dirname(_downloadsPath!), 'Documents'), primary),
           const SizedBox(width: 8),
-          _buildShortcutChip('📱 Память', '/storage/emulated/0', primary),
+          _buildShortcutChip('📱 Память', p.dirname(_downloadsPath!), primary),
         ],
       ),
     );
@@ -794,18 +823,11 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
         fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
       ),
       side: BorderSide(color: isCurrent ? primary : Colors.white12),
-      onSelected: (_) async {
-        final d = Directory(path);
-        if (await d.exists()) {
-          _navigateTo(d);
+      onSelected: (_) {
+        if (path == _downloadsPath) {
+          _openDownloads();
         } else {
-          if (!_hasStorageAccess) {
-            await CompressorService.requestAllFilesAccess();
-          } else if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Папка не существует или недоступна: $path')),
-            );
-          }
+          _navigateTo(Directory(path));
         }
       },
     );
@@ -1053,13 +1075,13 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
         children: [
           const Icon(Icons.folder_zip_outlined, size: 54, color: Colors.white24),
           const SizedBox(height: 14),
-          const Text(
-            'Архивов манги не найдено',
+          Text(
+            _directoryError == null ? 'Архивов манги не найдено' : 'Папка недоступна',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white70),
           ),
           const SizedBox(height: 6),
-          const Text(
-            'В этой папке нет файлов с расширением .zip или .cbz. Перейдите в другую папку выше.',
+          Text(
+            _directoryError ?? 'В этой папке нет файлов с расширением .zip или .cbz. Перейдите в другую папку выше.',
             style: TextStyle(fontSize: 12, color: Colors.grey),
             textAlign: TextAlign.center,
           ),
@@ -1072,12 +1094,7 @@ class _MangaFileExplorerScreenState extends State<MangaFileExplorerScreen> with 
             ),
             icon: const Icon(Icons.download_rounded, size: 18),
             label: const Text('Перейти в Загрузки'),
-            onPressed: () {
-              final d = Directory('/storage/emulated/0/Download');
-              if (d.existsSync()) {
-                _navigateTo(d);
-              }
-            },
+            onPressed: _openDownloads,
           ),
         ],
       ),
