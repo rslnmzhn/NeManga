@@ -29,10 +29,31 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
     _currentAuthor = widget.author;
   }
 
+  Future<void> _reloadAuthor() async {
+    final allGroups = await StorageService.getMangaGroups();
+    final authorTags = await StorageService.loadAllAuthorTags();
+    final blacklist = await StorageService.loadAuthorBlacklist();
+    final allAuthors = StorageService.buildAuthorsList(
+      allGroups: allGroups,
+      authorTagsMap: authorTags,
+      blacklist: blacklist,
+    );
+
+    final updated = allAuthors.firstWhere(
+      (a) => a.name == _currentAuthor.name,
+      orElse: () => AuthorData(name: _currentAuthor.name),
+    );
+
+    if (mounted) {
+      setState(() {
+        _currentAuthor = updated;
+      });
+      widget.onAuthorUpdated();
+    }
+  }
+
   void _editTags() {
     final primary = widget.settings.accentColor.color;
-
-    // Диалог редактирования жанров и тегов автора
     final tagController = TextEditingController();
     final currentTags = List<String>.from(_currentAuthor.tags);
 
@@ -177,6 +198,208 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
     );
   }
 
+  Future<void> _assignMangaDialog() async {
+    final allGroups = await StorageService.getMangaGroups();
+    final blacklist = await StorageService.loadAuthorBlacklist();
+    final allTitles = allGroups.map((g) => g.title).toList();
+
+    // Начальный список выбранных: все тайтлы, относящиеся к этому автору
+    final selectedIds = allGroups
+        .where((g) => g.displayAuthor(allTitles, blacklist) == _currentAuthor.name || g.author == _currentAuthor.name)
+        .map((g) => g.id)
+        .toSet();
+
+    final initialBelonging = Set<String>.from(selectedIds);
+
+    String query = '';
+    int tab = 0; // 0: Все, 1: Неопределенные, 2: Текущего автора
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final filtered = allGroups.where((g) {
+            final matchesQuery = query.isEmpty || g.title.toLowerCase().contains(query.toLowerCase());
+            if (!matchesQuery) return false;
+
+            if (tab == 1) {
+              // Неопределенные
+              final author = g.displayAuthor(allTitles, blacklist);
+              return author.isEmpty || author == 'Неизвестный автор';
+            } else if (tab == 2) {
+              // Только выбранные для этого автора
+              return selectedIds.contains(g.id);
+            }
+            return true;
+          }).toList();
+
+          final primary = widget.settings.accentColor.color;
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
+              children: [
+                Icon(Icons.playlist_add_check_rounded, color: primary, size: 24),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Привязать к: ${_currentAuthor.name}',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Поиск манги по названию...',
+                      hintStyle: const TextStyle(fontSize: 12),
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      filled: true,
+                      fillColor: const Color(0xFF242833),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                    onChanged: (val) {
+                      setDialogState(() {
+                        query = val;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        ChoiceChip(
+                          label: Text('Все (${allGroups.length})', style: const TextStyle(fontSize: 11)),
+                          selected: tab == 0,
+                          onSelected: (_) => setDialogState(() => tab = 0),
+                        ),
+                        const SizedBox(width: 6),
+                        ChoiceChip(
+                          label: const Text('Неопределённые', style: TextStyle(fontSize: 11)),
+                          selected: tab == 1,
+                          onSelected: (_) => setDialogState(() => tab = 1),
+                        ),
+                        const SizedBox(width: 6),
+                        ChoiceChip(
+                          label: Text('Выбрано (${selectedIds.length})', style: const TextStyle(fontSize: 11)),
+                          selected: tab == 2,
+                          onSelected: (_) => setDialogState(() => tab = 2),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 320),
+                    child: filtered.isEmpty
+                        ? const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Text('Тайтлы не найдены', style: TextStyle(color: Colors.grey)),
+                            ),
+                          )
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: filtered.length,
+                            itemBuilder: (ctx, idx) {
+                              final manga = filtered[idx];
+                              final isSelected = selectedIds.contains(manga.id);
+                              final currentAuthor = manga.displayAuthor(allTitles, blacklist);
+
+                              return CheckboxListTile(
+                                value: isSelected,
+                                activeColor: primary,
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                title: Text(
+                                  manga.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                                ),
+                                subtitle: Text(
+                                  currentAuthor.isNotEmpty ? 'Автор: $currentAuthor' : 'Автор не определен',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: currentAuthor.isNotEmpty ? Colors.white60 : Colors.amber,
+                                  ),
+                                ),
+                                onChanged: (val) {
+                                  setDialogState(() {
+                                    if (val == true) {
+                                      selectedIds.add(manga.id);
+                                    } else {
+                                      selectedIds.remove(manga.id);
+                                    }
+                                  });
+                                },
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Отмена', style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  // 1. Привязываем новые выбранные тайтлы
+                  final newlyAdded = selectedIds.difference(initialBelonging);
+                  if (newlyAdded.isNotEmpty) {
+                    await StorageService.assignAuthorToManga(
+                      mangaIds: newlyAdded.toList(),
+                      authorName: _currentAuthor.name,
+                    );
+                  }
+                  // 2. Отвязываем снятые с выбора тайтлы
+                  final removed = initialBelonging.difference(selectedIds);
+                  if (removed.isNotEmpty) {
+                    for (final id in removed) {
+                      await StorageService.unassignMangaFromAuthor(id);
+                    }
+                  }
+                  await _reloadAuthor();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Привязка манги к "${_currentAuthor.name}" сохранена!'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Сохранить'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   String _formatFileSize(int bytes) {
     if (bytes <= 0) return '0 МБ';
     const suffixes = ['Б', 'КБ', 'МБ', 'ГБ'];
@@ -206,6 +429,18 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
             expandedHeight: 240,
             pinned: true,
             backgroundColor: const Color(0xFF14171E),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.playlist_add_rounded),
+                tooltip: 'Привязать тайтлы к автору',
+                onPressed: _assignMangaDialog,
+              ),
+              IconButton(
+                icon: const Icon(Icons.label_outline_rounded),
+                tooltip: 'Жанры автора',
+                onPressed: _editTags,
+              ),
+            ],
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
@@ -276,7 +511,7 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
             ),
           ),
 
-          // Блок тегов и жанров автора
+          // Блок тегов и действий автора
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -284,23 +519,32 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Жанры автора:',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white70),
-                      ),
-                      TextButton.icon(
-                        style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                        icon: const Icon(Icons.label_outline_rounded, size: 16),
-                        label: Text(
-                          _currentAuthor.tags.isEmpty ? 'Добавить жанры' : 'Изменить',
-                          style: const TextStyle(fontSize: 12),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primary.withValues(alpha: 0.18),
+                          foregroundColor: primary,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
+                        icon: const Icon(Icons.playlist_add_rounded, size: 18),
+                        label: const Text('Привязать мангу'),
+                        onPressed: _assignMangaDialog,
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white70,
+                          side: const BorderSide(color: Colors.white24),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: const Icon(Icons.label_outline_rounded, size: 16),
+                        label: Text(_currentAuthor.tags.isEmpty ? 'Добавить жанры' : 'Жанры автора'),
                         onPressed: _editTags,
                       ),
                     ],
                   ),
+                  const SizedBox(height: 10),
                   if (_currentAuthor.tags.isNotEmpty) ...[
                     Wrap(
                       spacing: 6,
@@ -404,6 +648,41 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
                                         '${group.chapters.length} гл.',
                                         style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                                       ),
+                                    ),
+                                  ),
+                                  // Меню отвязки тайтла от этого автора
+                                  Positioned(
+                                    top: 4,
+                                    left: 4,
+                                    child: PopupMenuButton<String>(
+                                      icon: Container(
+                                        padding: const EdgeInsets.all(4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withValues(alpha: 0.65),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(Icons.more_vert, size: 16, color: Colors.white),
+                                      ),
+                                      color: const Color(0xFF222631),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      onSelected: (val) async {
+                                        if (val == 'unlink') {
+                                          await StorageService.unassignMangaFromAuthor(group.id);
+                                          await _reloadAuthor();
+                                        }
+                                      },
+                                      itemBuilder: (ctx) => [
+                                        const PopupMenuItem(
+                                          value: 'unlink',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.link_off_rounded, size: 16, color: Colors.redAccent),
+                                              SizedBox(width: 8),
+                                              Text('Отвязать от автора'),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],

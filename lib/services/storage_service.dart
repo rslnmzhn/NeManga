@@ -413,6 +413,34 @@ class StorageService {
     await prefs.setStringList(_keyAuthorBlacklist, clean);
   }
 
+  /// Назначить автора для нескольких тайтлов манги
+  static Future<void> assignAuthorToManga({
+    required List<String> mangaIds,
+    required String? authorName,
+  }) async {
+    final groups = await getMangaGroups();
+    final updatedList = <MangaGroup>[];
+    final cleanAuthor = authorName?.trim();
+
+    for (final group in groups) {
+      if (mangaIds.contains(group.id)) {
+        updatedList.add(group.copyWith(
+          author: (cleanAuthor != null && cleanAuthor.isNotEmpty) ? cleanAuthor : '',
+          updatedAt: DateTime.now(),
+        ));
+      } else {
+        updatedList.add(group);
+      }
+    }
+
+    await saveAllGroups(updatedList);
+  }
+
+  /// Отвязать тайтл от автора (сделать автора не заданным)
+  static Future<void> unassignMangaFromAuthor(String mangaId) async {
+    await assignAuthorToManga(mangaIds: [mangaId], authorName: '');
+  }
+
   /// Агрегировать список авторов со всеми тайтлами, обложками и тегами
   static List<AuthorData> buildAuthorsList({
     required List<MangaGroup> allGroups,

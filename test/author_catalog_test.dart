@@ -8,7 +8,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('AuthorDetector Tests', () {
-    test('Extracts author from bracket notations', () {
+    test('Extracts author from bracket notations and group-author scheme [Group (Author)]', () {
+      expect(AuthorDetector.detectAuthor('[Studio Orange (Inio Asano)] Solanin'), 'Inio Asano');
+      expect(AuthorDetector.detectAuthor('[(Inio Asano)] Solanin'), 'Inio Asano');
+      expect(AuthorDetector.detectAuthor('[Studio Orange(Inio Asano)] Solanin'), 'Inio Asano');
+      expect(AuthorDetector.detectAuthor('[Studio Orange ()] Solanin'), 'Studio Orange');
+      expect(AuthorDetector.detectAuthor('[Studio Orange] Solanin'), 'Studio Orange');
+      expect(AuthorDetector.detectAuthor('(C99) [Circle X (Kentaro Miura)] Berserk'), 'Kentaro Miura');
       expect(AuthorDetector.detectAuthor('[Oda Eiichiro] One Piece'), 'Oda Eiichiro');
       expect(AuthorDetector.detectAuthor('(Inio Asano) Solanin'), 'Inio Asano');
       expect(AuthorDetector.detectAuthor('【Kentaro Miura】 Berserk'), 'Kentaro Miura');
@@ -216,6 +222,40 @@ void main() {
       final loaded = await StorageService.loadAuthorBlacklist();
       expect(loaded, contains('author-*'));
       expect(loaded, contains('mangalib*'));
+    });
+
+    test('StorageService assignAuthorToManga and unassignMangaFromAuthor', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      final manga = MangaGroup(
+        id: 'm_test_1',
+        title: 'Unknown Title',
+        author: null,
+        status: ReadingStatus.reading,
+        updatedAt: DateTime.now(),
+      );
+
+      await StorageService.saveMangaGroup(manga);
+
+      // Initially author is unknown
+      var groups = await StorageService.getMangaGroups();
+      expect(groups.first.displayAuthor(), '');
+
+      // Assign to Author
+      await StorageService.assignAuthorToManga(
+        mangaIds: ['m_test_1'],
+        authorName: 'Custom Mangaka',
+      );
+
+      groups = await StorageService.getMangaGroups();
+      expect(groups.first.author, 'Custom Mangaka');
+      expect(groups.first.displayAuthor(), 'Custom Mangaka');
+
+      // Unassign
+      await StorageService.unassignMangaFromAuthor('m_test_1');
+      groups = await StorageService.getMangaGroups();
+      expect(groups.first.author, '');
+      expect(groups.first.displayAuthor(), '');
     });
   });
 }

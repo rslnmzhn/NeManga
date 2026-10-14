@@ -412,7 +412,23 @@ class AuthorDetector {
     return false;
   }
 
-  /// Автоматическое определение автора из заголовка манги с учетом блеклиста
+  /// Проверка кандидата на невалидный/служебный токен
+  static bool isInvalidToken(String? text, [Iterable<String>? blacklist]) {
+    if (text == null) return true;
+    final clean = text.trim();
+    if (clean.length < 2) return true;
+    final lower = clean.toLowerCase();
+    if (_ignoreTokens.contains(lower)) return true;
+    if (RegExp(r'^(c\d{2,3}|comiket|vol|volume|том|ch|chapter|глава|part|часть|\d+)', caseSensitive: false).hasMatch(lower)) {
+      return true;
+    }
+    if (matchesBlacklist(clean, blacklist)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Автоматическое определение автора из заголовка манги по схеме [Группа (Автор)] / [(Автор)] / [Группа]
   static String? detectAuthor(
     String title, [
     Iterable<String>? allLibraryTitles,
@@ -421,39 +437,55 @@ class AuthorDetector {
     final clean = title.trim();
     if (clean.isEmpty) return null;
 
-    // 1. Паттерны скобок: [Автор] Название или (Автор) Название или 【Автор】 Название
-    final bracketMatches = RegExp(r'[\[\(\【\{]([^\]\)\】\}]+)[\]\)\】\}]').allMatches(clean);
+    // 1. Поиск структуры [Группа (Автор)] или [Группа(Автор)] или [(Автор)] или [Автор]
+    final bracketMatches = RegExp(r'[\[\【\{]([^\]\】\}]+)[\]\】\}]').allMatches(clean);
     for (final match in bracketMatches) {
-      final candidate = match.group(1)?.trim();
-      if (candidate != null && candidate.isNotEmpty && candidate.length >= 2) {
-        final lower = candidate.toLowerCase();
-        final isVolOrCh = RegExp(r'^(vol|volume|том|ch|chapter|глава|\d+)', caseSensitive: false).hasMatch(lower);
-        if (!isVolOrCh && !_ignoreTokens.contains(lower) && !matchesBlacklist(candidate, blacklist)) {
-          return candidate;
+      final inside = match.group(1)?.trim() ?? '';
+      // Проверяем наличие круглых скобок внутри блока: (Автор)
+      final parenMatch = RegExp(r'[\(\（]([^\)\）]*)[\)\）]').firstMatch(inside);
+      if (parenMatch != null) {
+        final authorInside = parenMatch.group(1)?.trim() ?? '';
+        if (!isInvalidToken(authorInside, blacklist)) {
+          return authorInside;
+        }
+        // Если автор в круглых скобках пуст или служебный, берём группу снаружи скобок
+        final groupOutside = inside.replaceAll(RegExp(r'[\(\（][^\)\）]*[\)\）]'), '').trim();
+        if (!isInvalidToken(groupOutside, blacklist)) {
+          return groupOutside;
+        }
+      } else {
+        // Скобок внутри нет — проверяем блок как автора/группу
+        if (!isInvalidToken(inside, blacklist)) {
+          return inside;
         }
       }
     }
 
-    // 2. Паттерн разделителя: "Автор - Название" (но не "Том 1 - Глава 2")
+    // 2. Отдельные скобки в начале: (Автор) Название
+    final standaloneParen = RegExp(r'^\s*[\(\（]([^\)\）]+)[\)\）]').firstMatch(clean);
+    if (standaloneParen != null) {
+      final cand = standaloneParen.group(1)?.trim();
+      if (!isInvalidToken(cand, blacklist)) {
+        return cand;
+      }
+    }
+
+    // 3. Паттерн разделителя: "Автор - Название" (но не "Том 1 - Глава 2")
     if (clean.contains(' - ')) {
       final parts = clean.split(' - ');
       if (parts.length >= 2) {
         final prefix = parts[0].trim();
-        final lower = prefix.toLowerCase();
-        final isVolOrCh = RegExp(r'^(vol|volume|том|ch|chapter|глава|\d+)', caseSensitive: false).hasMatch(lower);
-        if (!isVolOrCh && prefix.isNotEmpty && prefix.length >= 2 && prefix.length <= 40) {
-          if (!matchesBlacklist(prefix, blacklist)) {
-            return prefix;
-          }
+        if (prefix.length >= 2 && prefix.length <= 40 && !isInvalidToken(prefix, blacklist)) {
+          return prefix;
         }
       }
     }
 
-    // 3. Отслеживание повторяющихся первых слов / префиксов среди всех тайтлов библиотеки
+    // 4. Отслеживание повторяющихся первых слов / префиксов среди всех тайтлов библиотеки
     if (allLibraryTitles != null && allLibraryTitles.length >= 2) {
       final commonAuthor = _findCommonPrefixAuthor(clean, allLibraryTitles, blacklist);
       if (commonAuthor != null && commonAuthor.isNotEmpty) {
-        if (!matchesBlacklist(commonAuthor, blacklist)) {
+        if (!isInvalidToken(commonAuthor, blacklist)) {
           return commonAuthor;
         }
       }
@@ -530,9 +562,9 @@ class MangaGroup {
 
   /// Получить автора манги (явно заданного или извлеченного из названия)
   String displayAuthor([Iterable<String>? allLibraryTitles, Iterable<String>? blacklist]) {
-    if (author != null && author!.trim().isNotEmpty) {
+    if (author != null) {
       final explicit = author!.trim();
-      if (AuthorDetector.matchesBlacklist(explicit, blacklist)) {
+      if (explicit.isEmpty || AuthorDetector.matchesBlacklist(explicit, blacklist)) {
         return '';
       }
       return explicit;
