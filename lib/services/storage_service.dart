@@ -74,10 +74,16 @@ class StorageService {
       for (final item in groupJsonList) {
         try {
           final group = MangaGroup.fromJson(item);
-          // Фильтруем главы, чьи файлы ещё существуют на диске
-          final validChapters = group.chapters.where((c) => File(c.filePath).existsSync()).toList();
-          if (validChapters.isNotEmpty) {
-            groups.add(group.copyWith(chapters: validChapters));
+          if (group.chapters.isEmpty) {
+            groups.add(group);
+          } else {
+            // Сохраняем группу, фильтруя удаленные файлы, если часть еще существует
+            final validChapters = group.chapters.where((c) => File(c.filePath).existsSync()).toList();
+            if (validChapters.isNotEmpty) {
+              groups.add(group.copyWith(chapters: validChapters));
+            } else {
+              groups.add(group);
+            }
           }
         } catch (_) {}
       }
