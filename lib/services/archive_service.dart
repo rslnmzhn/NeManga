@@ -378,7 +378,7 @@ class ArchiveService {
           // В скобках: [prefix...]
           cleaned = cleaned.replaceAll(RegExp(r'\[\s*' + esc + r'[^\]]*\s*\][\s_\-:]*', caseSensitive: false), '');
           // Префикс с ID: prefix-12345- или prefix_1234_ или prefix1234-
-          cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)' + esc + r'[\w\d]*[\s_\-:]+', caseSensitive: false), ' ');
+          cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)' + esc + r'[0-9a-zA-Z]*[\s_\-:]+', caseSensitive: false), ' ');
           // Просто префикс: prefix-
           cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)' + esc + r'[\s_\-:]*', caseSensitive: false), ' ');
         }
@@ -387,7 +387,7 @@ class ArchiveService {
         if (middle.isNotEmpty) {
           final esc = RegExp.escape(middle);
           cleaned = cleaned.replaceAll(RegExp(r'\[\s*[^\]]*' + esc + r'[^\]]*\s*\][\s_\-:]*', caseSensitive: false), '');
-          cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)[\w\d_\-]*' + esc + r'[\w\d_\-]*[\s_\-:]*', caseSensitive: false), ' ');
+          cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)[0-9a-zA-Z]*' + esc + r'[0-9a-zA-Z]*[\s_\-:]*', caseSensitive: false), ' ');
         }
       } else {
         final esc = RegExp.escape(p);
