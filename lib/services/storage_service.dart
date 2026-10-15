@@ -44,6 +44,8 @@ class StorageService {
   static const String _keyAuthorsTags = 'nemanga_authors_tags';
   static const String _keyAuthorBlacklist = 'nemanga_author_blacklist';
   static const String _keyTitleCleanupPatterns = 'nemanga_title_cleanup_patterns';
+  static const String _keyReadingStats = 'nemanga_reading_stats';
+  static const String _keyBookmarks = 'nemanga_manga_bookmarks';
 
   /// Загрузка сохранённых настроек ридера
   static Future<ReaderSettings> loadSettings() async {
@@ -216,11 +218,16 @@ class StorageService {
       fileSize: fileSize,
     );
 
-    final author = AuthorDetector.detectAuthor(title);
+    final comicInfo = await ArchiveService.extractComicInfo(filePath);
+    final detectedAuthor = AuthorDetector.detectAuthor(title);
+    final finalAuthor = comicInfo?.author ?? detectedAuthor;
+    final finalTags = comicInfo?.tags ?? [];
+
     final newGroup = MangaGroup(
       id: filePath,
       title: title,
-      author: author,
+      author: finalAuthor,
+      tags: finalTags,
       coverPath: coverPath,
       status: ReadingStatus.reading,
       chapters: [newChapter],
@@ -491,6 +498,77 @@ class StorageService {
   /// Отвязать тайтл от автора (сделать автора не заданным)
   static Future<void> unassignMangaFromAuthor(String mangaId) async {
     await assignAuthorToManga(mangaIds: [mangaId], authorName: '');
+  }
+
+  /// Загрузить локальную статистику чтения
+  static Future<ReadingUserStats> loadReadingStats() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(_keyReadingStats);
+    if (jsonStr == null || jsonStr.isEmpty) {
+      return const ReadingUserStats();
+    }
+    try {
+      return ReadingUserStats.fromJson(jsonStr);
+    } catch (_) {
+      return const ReadingUserStats();
+    }
+  }
+
+  /// Зафиксировать прочитанную страницу
+  static Future<void> recordPageRead() async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = await loadReadingStats();
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    final dates = List<String>.from(current.readDates);
+    if (!dates.contains(today)) {
+      dates.add(today);
+    }
+    final updated = ReadingUserStats(
+      totalPagesRead: current.totalPagesRead + 1,
+      totalReadingSeconds: current.totalReadingSeconds,
+      completedChaptersCount: current.completedChaptersCount,
+      readDates: dates,
+    );
+    await prefs.setString(_keyReadingStats, updated.toJson());
+  }
+
+  /// Зафиксировать время чтения (в секундах)
+  static Future<void> recordReadingTime(int seconds) async {
+    if (seconds <= 0) return;
+    final prefs = await SharedPreferences.getInstance();
+    final current = await loadReadingStats();
+    final updated = ReadingUserStats(
+      totalPagesRead: current.totalPagesRead,
+      totalReadingSeconds: current.totalReadingSeconds + seconds,
+      completedChaptersCount: current.completedChaptersCount,
+      readDates: current.readDates,
+    );
+    await prefs.setString(_keyReadingStats, updated.toJson());
+  }
+
+  /// Загрузить сохраненные закладки для тайтла
+  static Future<Set<int>> loadBookmarks(String mangaId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${_keyBookmarks}_$mangaId';
+    final list = prefs.getStringList(key);
+    if (list == null) return {};
+    return list.map((e) => int.tryParse(e) ?? 0).toSet();
+  }
+
+  /// Добавить или убрать страницу из закладок
+  static Future<bool> toggleBookmark(String mangaId, int pageIndex) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${_keyBookmarks}_$mangaId';
+    final current = await loadBookmarks(mangaId);
+    bool added = false;
+    if (current.contains(pageIndex)) {
+      current.remove(pageIndex);
+    } else {
+      current.add(pageIndex);
+      added = true;
+    }
+    await prefs.setStringList(key, current.map((e) => e.toString()).toList());
+    return added;
   }
 
   /// Агрегировать список авторов со всеми тайтлами, обложками и тегами

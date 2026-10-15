@@ -321,11 +321,16 @@ class _HomeScreenState extends State<HomeScreen> {
           ));
         }
 
-        final author = AuthorDetector.detectAuthor(groupTitle);
+        final comicInfo = await ArchiveService.extractComicInfo(validPaths.first);
+        final detectedAuthor = AuthorDetector.detectAuthor(groupTitle);
+        final finalAuthor = comicInfo?.author ?? detectedAuthor;
+        final finalTags = comicInfo?.tags ?? [];
+
         final newGroup = MangaGroup(
           id: 'group_${DateTime.now().millisecondsSinceEpoch}',
-          title: groupTitle,
-          author: author,
+          title: (comicInfo?.series != null && comicInfo!.series!.isNotEmpty) ? comicInfo.series! : groupTitle,
+          author: finalAuthor,
+          tags: finalTags,
           coverPath: groupCover,
           status: ReadingStatus.reading,
           chapters: chapters,
@@ -969,6 +974,124 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _showReadingStatsDialog() async {
+    final stats = await StorageService.loadReadingStats();
+    final primary = _settings.accentColor.color;
+    final totalSize = _allGroups.fold(0, (sum, g) => sum + g.totalSize);
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1B1E26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: primary.withValues(alpha: 0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.bar_chart_rounded, color: primary, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Статистика чтения',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildStatTile('Прочитано страниц', '${stats.totalPagesRead}', Icons.menu_book_rounded, Colors.amber),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildStatTile('Время за чтением', stats.totalTimeFormatted, Icons.timer_outlined, Colors.cyanAccent),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildStatTile('Дней чтения', '${stats.uniqueDaysCount}', Icons.calendar_today_rounded, Colors.greenAccent),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildStatTile('Тайтлов в коллекции', '${_allGroups.length}', Icons.auto_stories_rounded, primary),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF13151B),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Общий объём библиотеки:', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                    Text(_formatFileSize(totalSize), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatTile(String label, String value, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF13151B),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showBatchRenameDialog() async {
     final savedPatterns = await StorageService.loadTitleCleanupPatterns();
     final currentPatterns = List<String>.from(savedPatterns);
@@ -1400,7 +1523,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.more_vert),
             color: const Color(0xFF1B1E26),
             onSelected: (val) {
-              if (val == 'batch_rename') {
+              if (val == 'reading_stats') {
+                _showReadingStatsDialog();
+              } else if (val == 'batch_rename') {
                 _showBatchRenameDialog();
               } else if (val == 'storage') {
                 _showStorageDashboard();
@@ -1415,6 +1540,16 @@ class _HomeScreenState extends State<HomeScreen> {
               }
             },
             itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'reading_stats',
+                child: Row(
+                  children: [
+                    Icon(Icons.bar_chart_rounded, size: 18, color: Colors.greenAccent),
+                    SizedBox(width: 10),
+                    Text('Статистика чтения'),
+                  ],
+                ),
+              ),
               const PopupMenuItem(
                 value: 'batch_rename',
                 child: Row(

@@ -3,8 +3,10 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
+import '../services/compressor_service.dart';
 import '../services/storage_service.dart';
 import '../widgets/reader_settings_sheet.dart';
 import 'manga_file_explorer_screen.dart';
@@ -103,6 +105,20 @@ class _ImageDimensionHelper {
   }
 }
 
+class _DisplaySubPage {
+  final int fileIndex;
+  final String filePath;
+  final bool isRightHalf;
+  final bool isLeftHalf;
+
+  const _DisplaySubPage({
+    required this.fileIndex,
+    required this.filePath,
+    this.isRightHalf = false,
+    this.isLeftHalf = false,
+  });
+}
+
 class ReaderScreen extends StatefulWidget {
   final String title;
   final String archivePath;
@@ -141,6 +157,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
   final Map<int, double> _pageHeights = {};
   double _lastCalculatedWidth = 0;
 
+  // Закладки и статистика времени
+  Set<int> _bookmarkedPages = {};
+  final DateTime _sessionStartTime = DateTime.now();
+
+  // Автопрокрутка вебтуна
+  bool _isAutoScrolling = false;
+  double _autoScrollSpeed = 1.8;
+  Timer? _autoScrollTimer;
+
+  // Виртуальные страницы с учетом автосплита разворотов
+  List<_DisplaySubPage> _displayPages = [];
+
   @override
   void initState() {
     super.initState();
@@ -149,6 +177,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _pageController = PageController(initialPage: _currentPage);
 
     _initAspectRatios();
+    _initDisplayPages();
+    _loadBookmarks();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _precacheUpcomingPages(_currentPage);
+    });
 
     // Скрываем системные бары через короткую паузу
     _scheduleHideControls();
@@ -184,6 +217,128 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  Future<void> _loadBookmarks() async {
+    final mangaId = widget.mangaGroup?.id ?? widget.title;
+    final b = await StorageService.loadBookmarks(mangaId);
+    if (mounted) {
+      setState(() {
+        _bookmarkedPages = b;
+      });
+    }
+  }
+
+  Future<void> _toggleBookmarkOnCurrentPage() async {
+    final mangaId = widget.mangaGroup?.id ?? widget.title;
+    final added = await StorageService.toggleBookmark(mangaId, _currentPage);
+    final b = await StorageService.loadBookmarks(mangaId);
+    if (mounted) {
+      setState(() {
+        _bookmarkedPages = b;
+      });
+      _vibrate();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(added ? 'Страница ${_currentPage + 1} добавлена в закладки' : 'Закладка со страницы ${_currentPage + 1} удалена'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    }
+  }
+
+  Future<void> _saveCurrentPageSnapshot() async {
+    try {
+      final publicDir = await CompressorService.getPublicMangaDirectory();
+      final snapshotsDir = Directory(p.join(publicDir.path, 'Snapshots'));
+      if (!await snapshotsDir.exists()) {
+        await snapshotsDir.create(recursive: true);
+      }
+      final currentFile = File(widget.pagePaths[_currentPage]);
+      final ext = p.extension(currentFile.path);
+      final cleanExt = ext.isNotEmpty ? ext : '.jpg';
+      final cleanTitle = widget.title.replaceAll(RegExp(r'[^\w\d\-_]'), '_');
+      final targetPath = p.join(
+        snapshotsDir.path,
+        '${cleanTitle}_page_${_currentPage + 1}_${DateTime.now().millisecondsSinceEpoch}$cleanExt',
+      );
+      await currentFile.copy(targetPath);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Кадр сохранён в Загрузки/NeManga/Snapshots/!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка сохранения кадра: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
+  void _precacheUpcomingPages(int currentIndex) {
+    if (!mounted) return;
+    StorageService.recordPageRead();
+    for (int i = 1; i <= 4; i++) {
+      final nextIdx = currentIndex + i;
+      if (nextIdx < widget.pagePaths.length) {
+        final path = widget.pagePaths[nextIdx];
+        precacheImage(FileImage(File(path)), context);
+      }
+    }
+  }
+
+  void _toggleAutoScroll() {
+    if (_isAutoScrolling) {
+      _autoScrollTimer?.cancel();
+      setState(() {
+        _isAutoScrolling = false;
+      });
+    } else {
+      setState(() {
+        _isAutoScrolling = true;
+      });
+      _autoScrollTimer?.cancel();
+      _autoScrollTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+        if (!_webtoonScrollController.hasClients) return;
+        final next = _webtoonScrollController.offset + _autoScrollSpeed;
+        if (next >= _webtoonScrollController.position.maxScrollExtent) {
+          _toggleAutoScroll();
+          return;
+        }
+        _webtoonScrollController.jumpTo(next);
+      });
+    }
+  }
+
+  void _initDisplayPages() {
+    _displayPages = [];
+    final isRtl = _settings.mode == ReaderMode.horizontalRtl;
+
+    for (int i = 0; i < widget.pagePaths.length; i++) {
+      final path = widget.pagePaths[i];
+      final dims = _ImageDimensionHelper.getImageDimensions(path);
+      final isWide = _settings.splitDoublePages &&
+          _settings.mode != ReaderMode.webtoon &&
+          dims != null &&
+          dims.$1 > dims.$2 * 1.15;
+
+      if (isWide) {
+        if (isRtl) {
+          _displayPages.add(_DisplaySubPage(fileIndex: i, filePath: path, isRightHalf: true));
+          _displayPages.add(_DisplaySubPage(fileIndex: i, filePath: path, isLeftHalf: true));
+        } else {
+          _displayPages.add(_DisplaySubPage(fileIndex: i, filePath: path, isLeftHalf: true));
+          _displayPages.add(_DisplaySubPage(fileIndex: i, filePath: path, isRightHalf: true));
+        }
+      } else {
+        _displayPages.add(_DisplaySubPage(fileIndex: i, filePath: path));
+      }
+    }
+  }
+
   void _initAspectRatios() {
     for (int i = 0; i < widget.pagePaths.length; i++) {
       final dims = _ImageDimensionHelper.getImageDimensions(widget.pagePaths[i]);
@@ -208,6 +363,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    _autoScrollTimer?.cancel();
+    final elapsedSeconds = DateTime.now().difference(_sessionStartTime).inSeconds;
+    StorageService.recordReadingTime(elapsedSeconds);
     _hideControlsTimer?.cancel();
     _webtoonScrollController.removeListener(_onWebtoonScroll);
     _webtoonScrollController.dispose();
@@ -585,6 +743,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         onSettingsChanged: (newSettings) {
           setState(() {
             _settings = newSettings;
+            _initDisplayPages();
             // Пересоздаем контроллер для синхронизации страницы
             if (_pageController.hasClients && _currentPage != _pageController.page?.round()) {
               _pageController = PageController(initialPage: _currentPage);
@@ -676,6 +835,66 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   child: _buildTopBar(),
                 ),
               ),
+
+              // Плавающая панель управления автопрокруткой
+              if (_isAutoScrolling)
+                Positioned(
+                  bottom: 85,
+                  right: 16,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.5)),
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black54, blurRadius: 8, offset: Offset(0, 4)),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              _autoScrollSpeed = (_autoScrollSpeed - 0.5).clamp(0.5, 6.0);
+                            });
+                          },
+                          child: const Padding(
+                            padding: EdgeInsets.all(4),
+                            child: Icon(Icons.remove, size: 16, color: Colors.white),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: Text(
+                            '${_autoScrollSpeed.toStringAsFixed(1)}x',
+                            style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12),
+                          ),
+                        ),
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              _autoScrollSpeed = (_autoScrollSpeed + 0.5).clamp(0.5, 6.0);
+                            });
+                          },
+                          child: const Padding(
+                            padding: EdgeInsets.all(4),
+                            child: Icon(Icons.add, size: 16, color: Colors.white),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        InkWell(
+                          onTap: _toggleAutoScroll,
+                          child: const Padding(
+                            padding: EdgeInsets.all(4),
+                            child: Icon(Icons.pause, size: 18, color: Colors.redAccent),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
 
               // 4. Нижняя панель (Слайдер и кнопки)
               Positioned(
@@ -832,7 +1051,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       );
     }
 
-    final totalItems = widget.pagePaths.length + (hasGroup ? 1 : 0);
+    final totalItems = _displayPages.length + (hasGroup ? 1 : 0);
 
     return PageView.builder(
       controller: _pageController,
@@ -841,42 +1060,50 @@ class _ReaderScreenState extends State<ReaderScreen> {
       physics: const BouncingScrollPhysics(),
       itemCount: totalItems,
       onPageChanged: (index) {
-        if (index < widget.pagePaths.length) {
+        if (index < _displayPages.length) {
+          final fileIdx = _displayPages[index].fileIndex;
           setState(() {
-            _currentPage = index;
+            _currentPage = fileIdx;
           });
           _vibrate();
           _saveCurrentProgress();
+          _precacheUpcomingPages(fileIdx);
         }
       },
       itemBuilder: (context, index) {
-        if (index == widget.pagePaths.length) {
+        if (index == _displayPages.length) {
           return Center(
             child: _buildEndOfChapterWidget(MediaQuery.of(context).size.width * 0.9),
           );
         }
 
-        final filePath = widget.pagePaths[index];
+        final subPage = _displayPages[index];
+        final filePath = subPage.filePath;
+
+        Widget pageImage;
+        if (subPage.isRightHalf || subPage.isLeftHalf) {
+          pageImage = ClipRect(
+            child: Align(
+              alignment: subPage.isRightHalf ? Alignment.centerRight : Alignment.centerLeft,
+              widthFactor: 0.5,
+              child: Image.file(
+                File(filePath),
+                fit: _getImageFit(),
+              ),
+            ),
+          );
+        } else {
+          pageImage = Image.file(
+            File(filePath),
+            fit: _getImageFit(),
+          );
+        }
+
         return InteractiveViewer(
           minScale: 1.0,
           maxScale: 4.0,
           child: Center(
-            child: Image.file(
-              File(filePath),
-              fit: _getImageFit(),
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  height: 250,
-                  color: Colors.grey[900],
-                  child: Center(
-                    child: Text(
-                      'Ошибка загрузки стр. ${index + 1}',
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                  ),
-                );
-              },
-            ),
+            child: pageImage,
           ),
         );
       },
@@ -1191,6 +1418,28 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+          ),
+          if (_settings.mode == ReaderMode.webtoon)
+            IconButton(
+              icon: Icon(
+                _isAutoScrolling ? Icons.pause_circle_filled_rounded : Icons.play_circle_outline_rounded,
+                color: _isAutoScrolling ? Colors.greenAccent : Colors.white,
+              ),
+              tooltip: _isAutoScrolling ? 'Приостановить автопрокрутку' : 'Автопрокрутка вебтуна',
+              onPressed: _toggleAutoScroll,
+            ),
+          IconButton(
+            icon: Icon(
+              _bookmarkedPages.contains(_currentPage) ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+              color: _bookmarkedPages.contains(_currentPage) ? Colors.amber : Colors.white,
+            ),
+            tooltip: _bookmarkedPages.contains(_currentPage) ? 'Удалить закладку' : 'В закладки',
+            onPressed: _toggleBookmarkOnCurrentPage,
+          ),
+          IconButton(
+            icon: const Icon(Icons.download_rounded, color: Colors.white),
+            tooltip: 'Сохранить страницу в Загрузки',
+            onPressed: _saveCurrentPageSnapshot,
           ),
           IconButton(
             icon: const Icon(Icons.tune, color: Colors.white),

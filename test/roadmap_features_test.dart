@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nemanga/models/reader_models.dart';
+import 'package:nemanga/services/archive_service.dart';
 import 'package:nemanga/services/storage_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -111,6 +112,91 @@ void main() {
       expect(loadedSettings.appTheme, AppThemeMode.amoled);
 
       tempDir.deleteSync(recursive: true);
+    });
+
+    test('ReaderSettings splitDoublePages setting round-trip', () {
+      const s1 = ReaderSettings(splitDoublePages: true);
+      final json1 = s1.toJson();
+      expect(ReaderSettings.fromJson(json1).splitDoublePages, isTrue);
+
+      const s2 = ReaderSettings(splitDoublePages: false);
+      final json2 = s2.toJson();
+      expect(ReaderSettings.fromJson(json2).splitDoublePages, isFalse);
+    });
+
+    test('ArchiveService.parseComicInfoXml parses metadata correctly', () {
+      const xml = '''<?xml version="1.0"?>
+<ComicInfo>
+  <Title>Chapter 1</Title>
+  <Series>Berserk</Series>
+  <Writer>Kentaro Miura</Writer>
+  <Genre>Action, Dark Fantasy, Tragedy</Genre>
+  <Summary>A grim tale of revenge.</Summary>
+  <Volume>1</Volume>
+  <Year>1989</Year>
+</ComicInfo>''';
+
+      final meta = ArchiveService.parseComicInfoXml(xml);
+      expect(meta.title, 'Chapter 1');
+      expect(meta.series, 'Berserk');
+      expect(meta.author, 'Kentaro Miura');
+      expect(meta.summary, 'A grim tale of revenge.');
+      expect(meta.volume, '1');
+      expect(meta.year, '1989');
+      expect(meta.tags, contains('Action'));
+      expect(meta.tags, contains('Dark'));
+      expect(meta.tags, contains('Fantasy'));
+      expect(meta.tags, contains('Tragedy'));
+    });
+
+    test('ReadingUserStats formatting and tracking in StorageService', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      const stats1 = ReadingUserStats(
+        totalPagesRead: 150,
+        totalReadingSeconds: 45,
+      );
+      expect(stats1.totalTimeFormatted, '45 сек');
+
+      const stats2 = ReadingUserStats(
+        totalPagesRead: 150,
+        totalReadingSeconds: 300,
+      );
+      expect(stats2.totalTimeFormatted, '5 мин');
+
+      const stats3 = ReadingUserStats(
+        totalPagesRead: 150,
+        totalReadingSeconds: 3900, // 1h 5m
+      );
+      expect(stats3.totalTimeFormatted, '1ч 5м');
+
+      // Storage recording
+      await StorageService.recordPageRead();
+      await StorageService.recordReadingTime(120);
+
+      final loaded = await StorageService.loadReadingStats();
+      expect(loaded.totalPagesRead, 1);
+      expect(loaded.totalReadingSeconds, 120);
+      expect(loaded.uniqueDaysCount, 1);
+    });
+
+    test('Bookmarks toggle and load round-trip', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      final initial = await StorageService.loadBookmarks('manga_123');
+      expect(initial, isEmpty);
+
+      final added = await StorageService.toggleBookmark('manga_123', 5);
+      expect(added, isTrue);
+
+      final loaded = await StorageService.loadBookmarks('manga_123');
+      expect(loaded, contains(5));
+
+      final removed = await StorageService.toggleBookmark('manga_123', 5);
+      expect(removed, isFalse);
+
+      final afterRemoved = await StorageService.loadBookmarks('manga_123');
+      expect(afterRemoved, isEmpty);
     });
   });
 }

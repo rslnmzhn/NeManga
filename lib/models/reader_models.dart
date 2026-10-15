@@ -161,6 +161,7 @@ class ReaderSettings {
   final bool volumeKeysNavigation;
   final bool hapticFeedback;
   final bool dualPage;
+  final bool splitDoublePages;   // автоматический сплит горизонтальных разворотов
   final double customBrightness; // 0.0 .. 0.8 затемнение
   final bool warmFilter;         // тёплый ночной фильтр
   final AppThemeMode appTheme;
@@ -178,6 +179,7 @@ class ReaderSettings {
     this.volumeKeysNavigation = true,
     this.hapticFeedback = true,
     this.dualPage = false,
+    this.splitDoublePages = true,
     this.customBrightness = 0.0,
     this.warmFilter = false,
     this.appTheme = AppThemeMode.darkSlate,
@@ -196,6 +198,7 @@ class ReaderSettings {
     bool? volumeKeysNavigation,
     bool? hapticFeedback,
     bool? dualPage,
+    bool? splitDoublePages,
     double? customBrightness,
     bool? warmFilter,
     AppThemeMode? appTheme,
@@ -213,6 +216,7 @@ class ReaderSettings {
       volumeKeysNavigation: volumeKeysNavigation ?? this.volumeKeysNavigation,
       hapticFeedback: hapticFeedback ?? this.hapticFeedback,
       dualPage: dualPage ?? this.dualPage,
+      splitDoublePages: splitDoublePages ?? this.splitDoublePages,
       customBrightness: customBrightness ?? this.customBrightness,
       warmFilter: warmFilter ?? this.warmFilter,
       appTheme: appTheme ?? this.appTheme,
@@ -233,6 +237,7 @@ class ReaderSettings {
       'volumeKeysNavigation': volumeKeysNavigation,
       'hapticFeedback': hapticFeedback,
       'dualPage': dualPage,
+      'splitDoublePages': splitDoublePages,
       'customBrightness': customBrightness,
       'warmFilter': warmFilter,
       'appTheme': appTheme.index,
@@ -253,6 +258,7 @@ class ReaderSettings {
       volumeKeysNavigation: map['volumeKeysNavigation'] ?? true,
       hapticFeedback: map['hapticFeedback'] ?? true,
       dualPage: map['dualPage'] ?? false,
+      splitDoublePages: map['splitDoublePages'] ?? true,
       customBrightness: (map['customBrightness'] as num?)?.toDouble() ?? 0.0,
       warmFilter: map['warmFilter'] ?? false,
       appTheme: AppThemeMode.values[(map['appTheme'] ?? 0).clamp(0, AppThemeMode.values.length - 1)],
@@ -790,4 +796,94 @@ class BookMetadata {
   String toJson() => json.encode(toMap());
   factory BookMetadata.fromJson(String source) =>
       BookMetadata.fromMap(json.decode(source));
+}
+
+/// Метаданные ComicInfo.xml из архива манги/комикса
+class ComicMetadata {
+  final String? title;
+  final String? series;
+  final String? writer;
+  final String? penciller;
+  final String? summary;
+  final String? genre;
+  final String? year;
+  final String? volume;
+
+  ComicMetadata({
+    this.title,
+    this.series,
+    this.writer,
+    this.penciller,
+    this.summary,
+    this.genre,
+    this.year,
+    this.volume,
+  });
+
+  String? get author {
+    if (writer != null && writer!.trim().isNotEmpty) return writer!.trim();
+    if (penciller != null && penciller!.trim().isNotEmpty) return penciller!.trim();
+    return null;
+  }
+
+  List<String> get tags {
+    if (genre == null || genre!.trim().isEmpty) return [];
+    return genre!
+        .split(RegExp(r'[\s,;]+'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
+}
+
+/// Статистика чтения пользователя (полностью оффлайн/локально)
+class ReadingUserStats {
+  final int totalPagesRead;
+  final int totalReadingSeconds;
+  final int completedChaptersCount;
+  final List<String> readDates;
+
+  const ReadingUserStats({
+    this.totalPagesRead = 0,
+    this.totalReadingSeconds = 0,
+    this.completedChaptersCount = 0,
+    this.readDates = const [],
+  });
+
+  String get totalTimeFormatted {
+    if (totalReadingSeconds < 60) {
+      return '$totalReadingSeconds сек';
+    }
+    final minutes = totalReadingSeconds ~/ 60;
+    if (minutes < 60) {
+      return '$minutes мин';
+    }
+    final hours = minutes ~/ 60;
+    final remMinutes = minutes % 60;
+    return '$hoursч $remMinutesм';
+  }
+
+  int get uniqueDaysCount => readDates.toSet().length;
+
+  Map<String, dynamic> toMap() {
+    return {
+      'totalPagesRead': totalPagesRead,
+      'totalReadingSeconds': totalReadingSeconds,
+      'completedChaptersCount': completedChaptersCount,
+      'readDates': readDates,
+    };
+  }
+
+  factory ReadingUserStats.fromMap(Map<String, dynamic> map) {
+    return ReadingUserStats(
+      totalPagesRead: map['totalPagesRead'] ?? 0,
+      totalReadingSeconds: map['totalReadingSeconds'] ?? 0,
+      completedChaptersCount: map['completedChaptersCount'] ?? 0,
+      readDates: List<String>.from(map['readDates'] ?? []),
+    );
+  }
+
+  String toJson() => json.encode(toMap());
+  factory ReadingUserStats.fromJson(String source) =>
+      ReadingUserStats.fromMap(json.decode(source));
 }

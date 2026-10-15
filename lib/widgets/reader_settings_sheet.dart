@@ -223,6 +223,15 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                 _update(_current.copyWith(dualPage: val));
               },
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Умный сплит разворотов'),
+              subtitle: const Text('Автоматически разделять широкие страницы на две'),
+              value: _current.splitDoublePages,
+              onChanged: (val) {
+                _update(_current.copyWith(splitDoublePages: val));
+              },
+            ),
             const SizedBox(height: 16),
 
             // Ночной режим и яркость

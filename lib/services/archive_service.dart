@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import '../models/reader_models.dart';
 
 class MangaArchiveInfo {
   final String archivePath;
@@ -226,6 +227,23 @@ class ArchiveService {
     );
   }
 
+  /// Сохранить пользовательскую обложку в постоянное хранилище
+  static Future<String> saveCustomCover(String sourceImagePath, String mangaId) async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final coversDir = Directory(p.join(docsDir.path, 'nemanga_covers'));
+    if (!await coversDir.exists()) {
+      await coversDir.create(recursive: true);
+    }
+    final ext = p.extension(sourceImagePath);
+    final cleanExt = ext.isNotEmpty ? ext : '.jpg';
+    final targetPath = p.join(
+      coversDir.path,
+      'custom_cover_${DateTime.now().millisecondsSinceEpoch}$cleanExt',
+    );
+    await File(sourceImagePath).copy(targetPath);
+    return targetPath;
+  }
+
   /// Фоновая функция распаковки архива
   static List<String> _extractArchiveIsolate(Map<String, dynamic> args) {
     final archivePath = args['archivePath'] as String;
@@ -401,5 +419,42 @@ class ArchiveService {
     cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
     cleaned = cleaned.replaceAll(RegExp(r'^[\s_\-:]+|[\s_\-:]+$'), '').trim();
     return cleaned.isNotEmpty ? cleaned : title;
+  }
+
+  /// Парсинг XML-строки ComicInfo.xml
+  static ComicMetadata parseComicInfoXml(String xmlStr) {
+    String? extractTag(String tag) {
+      final match = RegExp('<$tag>(.*?)</$tag>', caseSensitive: false, dotAll: true).firstMatch(xmlStr);
+      return match?.group(1)?.trim();
+    }
+
+    return ComicMetadata(
+      title: extractTag('Title'),
+      series: extractTag('Series'),
+      writer: extractTag('Writer'),
+      penciller: extractTag('Penciller'),
+      summary: extractTag('Summary'),
+      genre: extractTag('Genre'),
+      year: extractTag('Year'),
+      volume: extractTag('Volume'),
+    );
+  }
+
+  /// Извлечение метаданных ComicInfo.xml из архива манги (если присутствует)
+  static Future<ComicMetadata?> extractComicInfo(String archivePath) async {
+    final file = File(archivePath);
+    if (!await file.exists()) return null;
+
+    try {
+      final bytes = await file.readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      for (final f in archive) {
+        if (f.name.toLowerCase().endsWith('comicinfo.xml')) {
+          final xmlStr = utf8.decode(f.content as List<int>, allowMalformed: true);
+          return parseComicInfoXml(xmlStr);
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 }

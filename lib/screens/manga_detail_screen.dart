@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import '../models/reader_models.dart';
@@ -272,6 +273,177 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     );
   }
 
+  Future<void> _showCoverPicker() async {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1B1E26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded, color: Colors.amber),
+              title: const Text('Выбрать страницу из глав'),
+              subtitle: const Text('Использовать любую страницу из архива как обложку'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickPageFromChapterAsCover();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.image_outlined, color: Colors.cyanAccent),
+              title: const Text('Выбрать изображение из галереи'),
+              subtitle: const Text('Установить любое изображение с устройства'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickCustomImageCover();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickCustomImageCover() async {
+    final res = await FilePicker.pickFiles(
+      type: FileType.image,
+    );
+    if (res.isNotEmpty && res.first.path != null) {
+      final pickedPath = res.first.path!;
+      final newCover = await ArchiveService.saveCustomCover(pickedPath, _manga.id);
+      final updated = _manga.copyWith(coverPath: newCover, updatedAt: DateTime.now());
+      await StorageService.saveMangaGroup(updated);
+      if (mounted) {
+        setState(() {
+          _manga = updated;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Обложка тайтла успешно обновлена!'), backgroundColor: Colors.green),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickPageFromChapterAsCover() async {
+    if (_manga.chapters.isEmpty) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final firstChapter = _manga.chapters.first;
+      final info = await ArchiveService.loadManga(firstChapter.filePath);
+      if (!mounted) return;
+      Navigator.pop(context);
+
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: const Color(0xFF161920),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (ctx) => DraggableScrollableSheet(
+          initialChildSize: 0.75,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (ctx, scrollCtrl) => Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Text(
+                  'Нажмите на страницу, чтобы сделать её обложкой',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white70),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: GridView.builder(
+                  controller: scrollCtrl,
+                  padding: const EdgeInsets.all(12),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    childAspectRatio: 0.7,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                  ),
+                  itemCount: info.pagePaths.length,
+                  itemBuilder: (ctx, idx) {
+                    final pagePath = info.pagePaths[idx];
+                    return InkWell(
+                      onTap: () async {
+                        Navigator.pop(ctx);
+                        final newCover = await ArchiveService.saveCustomCover(pagePath, _manga.id);
+                        final updated = _manga.copyWith(coverPath: newCover, updatedAt: DateTime.now());
+                        await StorageService.saveMangaGroup(updated);
+                        if (mounted) {
+                          setState(() {
+                            _manga = updated;
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Страница ${idx + 1} установлена как обложка!'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      },
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Image.file(File(pagePath), fit: BoxFit.cover),
+                            Positioned(
+                              bottom: 4,
+                              right: 4,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.8),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  '${idx + 1}',
+                                  style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка загрузки страниц: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final primary = widget.settings.accentColor.color;
@@ -326,22 +498,43 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            // Обложка
-                            ClipRRect(
+                            // Обложка с кнопкой смены
+                            InkWell(
+                              onTap: _showCoverPicker,
                               borderRadius: BorderRadius.circular(12),
-                              child: Container(
-                                width: 95,
-                                height: 135,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF1B1E26),
-                                  border: Border.all(color: Colors.white24),
-                                ),
-                                child: hasCover
-                                    ? Image.file(
-                                        File(_manga.coverPath!),
-                                        fit: BoxFit.cover,
-                                      )
-                                    : Icon(Icons.menu_book, color: primary, size: 40),
+                              child: Stack(
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: Container(
+                                      width: 95,
+                                      height: 135,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF1B1E26),
+                                        border: Border.all(color: Colors.white24),
+                                      ),
+                                      child: hasCover
+                                          ? Image.file(
+                                              File(_manga.coverPath!),
+                                              fit: BoxFit.cover,
+                                            )
+                                          : Icon(Icons.menu_book, color: primary, size: 40),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    bottom: 6,
+                                    right: 6,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(alpha: 0.75),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(color: Colors.white30),
+                                      ),
+                                      child: const Icon(Icons.camera_alt_outlined, size: 14, color: Colors.white),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                             const SizedBox(width: 16),
