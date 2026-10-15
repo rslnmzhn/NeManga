@@ -361,4 +361,45 @@ class ArchiveService {
     }
     return prefix;
   }
+
+  /// Очистка названия манги по шаблонам блеклиста (например, "site-*", "mangasite*", "[site]")
+  static String cleanTitleWithPatterns(String title, Iterable<String> patterns) {
+    var cleaned = title.trim();
+    if (cleaned.isEmpty) return title;
+
+    for (final rawPattern in patterns) {
+      final p = rawPattern.trim();
+      if (p.isEmpty) continue;
+
+      if (p.endsWith('*') && !p.startsWith('*')) {
+        final prefix = p.substring(0, p.length - 1).trim();
+        if (prefix.isNotEmpty) {
+          final esc = RegExp.escape(prefix);
+          // В скобках: [prefix...]
+          cleaned = cleaned.replaceAll(RegExp(r'\[\s*' + esc + r'[^\]]*\s*\][\s_\-:]*', caseSensitive: false), '');
+          // Префикс с ID: prefix-12345- или prefix_1234_ или prefix1234-
+          cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)' + esc + r'[\w\d]*[\s_\-:]+', caseSensitive: false), ' ');
+          // Просто префикс: prefix-
+          cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)' + esc + r'[\s_\-:]*', caseSensitive: false), ' ');
+        }
+      } else if (p.startsWith('*') && p.endsWith('*')) {
+        final middle = p.substring(1, p.length - 1).trim();
+        if (middle.isNotEmpty) {
+          final esc = RegExp.escape(middle);
+          cleaned = cleaned.replaceAll(RegExp(r'\[\s*[^\]]*' + esc + r'[^\]]*\s*\][\s_\-:]*', caseSensitive: false), '');
+          cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)[\w\d_\-]*' + esc + r'[\w\d_\-]*[\s_\-:]*', caseSensitive: false), ' ');
+        }
+      } else {
+        final esc = RegExp.escape(p);
+        cleaned = cleaned.replaceAll(RegExp(r'\[\s*' + esc + r'\s*\][\s_\-:]*', caseSensitive: false), '');
+        cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)' + esc + r'[\s_\-:]+', caseSensitive: false), ' ');
+        cleaned = cleaned.replaceAll(RegExp(r'(^|\s+)' + esc + r'(\s+|$)', caseSensitive: false), ' ');
+      }
+    }
+
+    // Убираем лишние пробелы и хвостовые/начальные разделители
+    cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
+    cleaned = cleaned.replaceAll(RegExp(r'^[\s_\-:]+|[\s_\-:]+$'), '').trim();
+    return cleaned.isNotEmpty ? cleaned : title;
+  }
 }

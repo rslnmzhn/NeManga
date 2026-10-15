@@ -43,6 +43,7 @@ class StorageService {
   static const String _keyMangaGroups = 'nemanga_manga_groups';
   static const String _keyAuthorsTags = 'nemanga_authors_tags';
   static const String _keyAuthorBlacklist = 'nemanga_author_blacklist';
+  static const String _keyTitleCleanupPatterns = 'nemanga_title_cleanup_patterns';
 
   /// Загрузка сохранённых настроек ридера
   static Future<ReaderSettings> loadSettings() async {
@@ -440,6 +441,51 @@ class StorageService {
     }
 
     await saveAllGroups(updatedList);
+  }
+
+  /// Загрузить шаблоны очистки названий
+  static Future<List<String>> loadTitleCleanupPatterns() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_keyTitleCleanupPatterns) ?? [];
+  }
+
+  /// Сохранить шаблоны очистки названий
+  static Future<void> saveTitleCleanupPatterns(List<String> list) async {
+    final prefs = await SharedPreferences.getInstance();
+    final clean = list
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toSet()
+        .toList();
+    await prefs.setStringList(_keyTitleCleanupPatterns, clean);
+  }
+
+  /// Массово обновить названия тайтлов манги в библиотеке
+  static Future<int> batchUpdateMangaTitles(Map<String, String> newTitlesById) async {
+    if (newTitlesById.isEmpty) return 0;
+    final groups = await getMangaGroups();
+    final updatedList = <MangaGroup>[];
+    int updatedCount = 0;
+
+    for (final group in groups) {
+      if (newTitlesById.containsKey(group.id)) {
+        final newTitle = newTitlesById[group.id]?.trim();
+        if (newTitle != null && newTitle.isNotEmpty && newTitle != group.title) {
+          updatedList.add(group.copyWith(
+            title: newTitle,
+            updatedAt: DateTime.now(),
+          ));
+          updatedCount++;
+          continue;
+        }
+      }
+      updatedList.add(group);
+    }
+
+    if (updatedCount > 0) {
+      await saveAllGroups(updatedList);
+    }
+    return updatedCount;
   }
 
   /// Отвязать тайтл от автора (сделать автора не заданным)

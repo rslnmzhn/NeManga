@@ -969,6 +969,319 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _showBatchRenameDialog() async {
+    final savedPatterns = await StorageService.loadTitleCleanupPatterns();
+    final currentPatterns = List<String>.from(savedPatterns);
+    final textController = TextEditingController();
+    final primary = _settings.accentColor.color;
+
+    const defaultSuggestions = [
+      'site-*',
+      'mangasite-*',
+      'remanga-*',
+      'readmanga-*',
+      'author-*',
+      '*scan*',
+    ];
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          // Вычисляем затронутые манги для предпросмотра
+          final affectedManga = <({MangaGroup manga, String newTitle})>[];
+          if (currentPatterns.isNotEmpty) {
+            for (final group in _allGroups) {
+              final newTitle = ArchiveService.cleanTitleWithPatterns(group.title, currentPatterns);
+              if (newTitle != group.title) {
+                affectedManga.add((manga: group, newTitle: newTitle));
+              }
+            }
+          }
+
+          final samples = affectedManga.take(3).toList();
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+            title: Row(
+              children: [
+                Icon(Icons.drive_file_rename_outline_rounded, color: primary, size: 24),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Массовое переименование названий',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Удаление названий сайтов, номеров и лишних префиксов из всех тайтлов библиотеки. Поддерживается знак * (например: site-*, название-*).',
+                      style: TextStyle(fontSize: 12, color: Colors.white70),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: textController,
+                            onSubmitted: (val) {
+                              final parts = val
+                                  .split(RegExp(r'[\s,]+'))
+                                  .map((s) => s.trim())
+                                  .where((s) => s.isNotEmpty);
+                              if (parts.isNotEmpty) {
+                                setDialogState(() {
+                                  for (final p in parts) {
+                                    if (!currentPatterns.contains(p)) {
+                                      currentPatterns.add(p);
+                                    }
+                                  }
+                                });
+                                textController.clear();
+                              }
+                            },
+                            decoration: InputDecoration(
+                              hintText: 'Шаблон (напр. site-*, author-*)...',
+                              hintStyle: const TextStyle(fontSize: 12),
+                              filled: true,
+                              fillColor: const Color(0xFF242833),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none,
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton.filled(
+                          style: IconButton.styleFrom(
+                            backgroundColor: primary,
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () {
+                            final val = textController.text;
+                            final parts = val
+                                .split(RegExp(r'[\s,]+'))
+                                .map((s) => s.trim())
+                                .where((s) => s.isNotEmpty);
+                            if (parts.isNotEmpty) {
+                              setDialogState(() {
+                                for (final p in parts) {
+                                  if (!currentPatterns.contains(p)) {
+                                    currentPatterns.add(p);
+                                  }
+                                }
+                              });
+                              textController.clear();
+                            }
+                          },
+                          icon: const Icon(Icons.add, size: 20),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (currentPatterns.isNotEmpty) ...[
+                      const Text(
+                        'Шаблоны для удаления:',
+                        style: TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: currentPatterns.map((pat) {
+                          return Chip(
+                            backgroundColor: Colors.redAccent.withValues(alpha: 0.15),
+                            side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.3)),
+                            label: Text(
+                              pat,
+                              style: const TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                            deleteIcon: const Icon(Icons.close, size: 14, color: Colors.redAccent),
+                            onDeleted: () {
+                              setDialogState(() {
+                                currentPatterns.remove(pat);
+                              });
+                            },
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    const Text(
+                      'Быстрые подсказки:',
+                      style: TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: defaultSuggestions.where((s) => !currentPatterns.contains(s)).map((s) {
+                        return ActionChip(
+                          label: Text(s, style: const TextStyle(fontSize: 11)),
+                          backgroundColor: Colors.white.withValues(alpha: 0.06),
+                          side: BorderSide.none,
+                          onPressed: () {
+                            setDialogState(() {
+                              currentPatterns.add(s);
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Секция предпросмотра на 3 мангах
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF13151B),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: affectedManga.isNotEmpty
+                              ? Colors.greenAccent.withValues(alpha: 0.3)
+                              : Colors.white10,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                affectedManga.isNotEmpty ? Icons.check_circle_outline : Icons.info_outline,
+                                size: 16,
+                                color: affectedManga.isNotEmpty ? Colors.greenAccent : Colors.grey,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  affectedManga.isNotEmpty
+                                      ? 'Предпросмотр (найдено: ${affectedManga.length} тайтлов):'
+                                      : 'Предпросмотр:',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: affectedManga.isNotEmpty ? Colors.greenAccent : Colors.grey,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          if (currentPatterns.isEmpty)
+                            const Text(
+                              'Добавьте хотя бы один шаблон для очистки выше.',
+                              style: TextStyle(fontSize: 11, color: Colors.grey),
+                            )
+                          else if (affectedManga.isEmpty)
+                            const Text(
+                              'Среди манги библиотеки нет названий, подходящих под указанные шаблоны.',
+                              style: TextStyle(fontSize: 11, color: Colors.grey),
+                            )
+                          else ...[
+                            for (final sample in samples) ...[
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Было: ${sample.manga.title}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.redAccent,
+                                        decoration: TextDecoration.lineThrough,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'Станет: ${sample.newTitle}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.greenAccent,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            if (affectedManga.length > 3)
+                              Text(
+                                '...и ещё ${affectedManga.length - 3} тайтл(ов)',
+                                style: const TextStyle(fontSize: 11, color: Colors.white60, fontStyle: FontStyle.italic),
+                              ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Отмена', style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: Colors.white12,
+                  disabledForegroundColor: Colors.white38,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: const Icon(Icons.cleaning_services_rounded, size: 18),
+                label: Text(
+                  affectedManga.isNotEmpty
+                      ? 'Очистить названия (${affectedManga.length})'
+                      : 'Очистить названия',
+                ),
+                onPressed: affectedManga.isEmpty
+                    ? null
+                    : () async {
+                        final nav = Navigator.of(ctx);
+                        final newTitlesMap = {for (final a in affectedManga) a.manga.id: a.newTitle};
+                        final count = await StorageService.batchUpdateMangaTitles(newTitlesMap);
+                        await StorageService.saveTitleCleanupPatterns(currentPatterns);
+                        await _loadData();
+                        nav.pop();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Успешно очищено названий манги: $count!'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _showAboutDialog() async {
     final version = await UpdateService.getCurrentVersion();
     if (!mounted) return;
@@ -1069,6 +1382,11 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.drive_file_rename_outline_rounded),
+            tooltip: 'Массовая очистка названий',
+            onPressed: _showBatchRenameDialog,
+          ),
+          IconButton(
             icon: const Icon(Icons.sync_rounded),
             tooltip: 'Сканировать папку NeManga',
             onPressed: _scanFolder,
@@ -1082,7 +1400,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.more_vert),
             color: const Color(0xFF1B1E26),
             onSelected: (val) {
-              if (val == 'storage') {
+              if (val == 'batch_rename') {
+                _showBatchRenameDialog();
+              } else if (val == 'storage') {
                 _showStorageDashboard();
               } else if (val == 'backup') {
                 _showBackupRestoreDialog();
@@ -1095,6 +1415,16 @@ class _HomeScreenState extends State<HomeScreen> {
               }
             },
             itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'batch_rename',
+                child: Row(
+                  children: [
+                    Icon(Icons.drive_file_rename_outline_rounded, size: 18, color: Colors.cyanAccent),
+                    SizedBox(width: 10),
+                    Text('Массовая очистка названий'),
+                  ],
+                ),
+              ),
               const PopupMenuItem(
                 value: 'storage',
                 child: Row(

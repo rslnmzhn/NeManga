@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/reader_models.dart';
 import '../services/storage_service.dart';
 import 'manga_detail_screen.dart';
+import 'manga_file_explorer_screen.dart';
 
 class AuthorDetailScreen extends StatefulWidget {
   final AuthorData author;
@@ -240,6 +241,7 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
           return AlertDialog(
             backgroundColor: const Color(0xFF1B1E26),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
             title: Row(
               children: [
                 Icon(Icons.playlist_add_check_rounded, color: primary, size: 24),
@@ -254,8 +256,8 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
             ),
             content: SizedBox(
               width: double.maxFinite,
+              height: MediaQuery.of(context).size.height * 0.72,
               child: Column(
-                mainAxisSize: MainAxisSize.min,
                 children: [
                   TextField(
                     decoration: InputDecoration(
@@ -302,8 +304,7 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 320),
+                  Expanded(
                     child: filtered.isEmpty
                         ? const Center(
                             child: Padding(
@@ -311,41 +312,102 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
                               child: Text('Тайтлы не найдены', style: TextStyle(color: Colors.grey)),
                             ),
                           )
-                        : ListView.builder(
-                            shrinkWrap: true,
+                        : ListView.separated(
                             itemCount: filtered.length,
+                            separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
                             itemBuilder: (ctx, idx) {
                               final manga = filtered[idx];
                               final isSelected = selectedIds.contains(manga.id);
                               final currentAuthor = manga.displayAuthor(allTitles, blacklist);
+                              final hasCover = manga.coverPath != null && File(manga.coverPath!).existsSync();
 
-                              return CheckboxListTile(
-                                value: isSelected,
-                                activeColor: primary,
-                                contentPadding: EdgeInsets.zero,
-                                dense: true,
-                                title: Text(
-                                  manga.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                                ),
-                                subtitle: Text(
-                                  currentAuthor.isNotEmpty ? 'Автор: $currentAuthor' : 'Автор не определен',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: currentAuthor.isNotEmpty ? Colors.white60 : Colors.amber,
-                                  ),
-                                ),
-                                onChanged: (val) {
+                              return InkWell(
+                                onTap: () {
                                   setDialogState(() {
-                                    if (val == true) {
-                                      selectedIds.add(manga.id);
-                                    } else {
+                                    if (isSelected) {
                                       selectedIds.remove(manga.id);
+                                    } else {
+                                      selectedIds.add(manga.id);
                                     }
                                   });
                                 },
+                                borderRadius: BorderRadius.circular(10),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                                  child: Row(
+                                    children: [
+                                      // Превью первой страницы архива
+                                      SizedBox(
+                                        width: 44,
+                                        height: 60,
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(6),
+                                          child: hasCover
+                                              ? Image.file(
+                                                  File(manga.coverPath!),
+                                                  fit: BoxFit.cover,
+                                                  errorBuilder: (_, __, ___) => _buildFallbackThumbnail(primary),
+                                                )
+                                              : (manga.chapters.isNotEmpty)
+                                                  ? MangaArchiveThumbnail(
+                                                      archivePath: manga.chapters.first.filePath,
+                                                      width: 44,
+                                                      height: 60,
+                                                      borderRadius: BorderRadius.circular(6),
+                                                    )
+                                                  : _buildFallbackThumbnail(primary),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      // Название тайтла и автор
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              manga.title,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              currentAuthor.isNotEmpty ? 'Автор: $currentAuthor' : 'Автор не определен',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: currentAuthor.isNotEmpty ? Colors.white60 : Colors.amber,
+                                                fontWeight: currentAuthor.isNotEmpty ? FontWeight.normal : FontWeight.bold,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              '${manga.chapters.length} гл. • ${_formatFileSize(manga.totalSize)}',
+                                              style: const TextStyle(fontSize: 10, color: Colors.grey),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Checkbox(
+                                        value: isSelected,
+                                        activeColor: primary,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                        onChanged: (val) {
+                                          setDialogState(() {
+                                            if (val == true) {
+                                              selectedIds.add(manga.id);
+                                            } else {
+                                              selectedIds.remove(manga.id);
+                                            }
+                                          });
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               );
                             },
                           ),
@@ -410,6 +472,15 @@ class _AuthorDetailScreenState extends State<AuthorDetailScreen> {
       i++;
     }
     return '${size.toStringAsFixed(1)} ${suffixes[i]}';
+  }
+
+  Widget _buildFallbackThumbnail(Color primary) {
+    return Container(
+      color: const Color(0xFF222631),
+      child: Center(
+        child: Icon(Icons.menu_book_rounded, color: primary.withValues(alpha: 0.5), size: 24),
+      ),
+    );
   }
 
   @override

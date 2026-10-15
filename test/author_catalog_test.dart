@@ -257,5 +257,69 @@ void main() {
       expect(groups.first.author, '');
       expect(groups.first.displayAuthor(), '');
     });
+
+    test('ArchiveService.cleanTitleWithPatterns cleans site prefixes and tokens', () {
+      final patterns = ['mangasite-*', 'site.ru-*', 'remanga'];
+
+      expect(
+        ArchiveService.cleanTitleWithPatterns('mangasite-12345-One Piece', patterns),
+        'One Piece',
+      );
+      expect(
+        ArchiveService.cleanTitleWithPatterns('mangasite-9988_Naruto_Vol_1', patterns),
+        'Naruto_Vol_1',
+      );
+      expect(
+        ArchiveService.cleanTitleWithPatterns('[mangasite-12345] Berserk', patterns),
+        'Berserk',
+      );
+      expect(
+        ArchiveService.cleanTitleWithPatterns('[remanga] Chainsaw Man', patterns),
+        'Chainsaw Man',
+      );
+      expect(
+        ArchiveService.cleanTitleWithPatterns('site.ru-001 - Solo Leveling', patterns),
+        'Solo Leveling',
+      );
+      expect(
+        ArchiveService.cleanTitleWithPatterns('Normal Manga Title', patterns),
+        'Normal Manga Title',
+      );
+    });
+
+    test('StorageService batchUpdateMangaTitles and saveTitleCleanupPatterns', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      final manga1 = MangaGroup(
+        id: 'm1',
+        title: 'mangasite-123-Bleach',
+        updatedAt: DateTime.now(),
+      );
+      final manga2 = MangaGroup(
+        id: 'm2',
+        title: 'mangasite-456-Naruto',
+        updatedAt: DateTime.now(),
+      );
+
+      await StorageService.saveAllGroups([manga1, manga2]);
+
+      // Save patterns
+      await StorageService.saveTitleCleanupPatterns(['mangasite-*']);
+      final loadedPatterns = await StorageService.loadTitleCleanupPatterns();
+      expect(loadedPatterns, contains('mangasite-*'));
+
+      // Batch update
+      final newTitlesMap = {
+        'm1': ArchiveService.cleanTitleWithPatterns(manga1.title, loadedPatterns),
+        'm2': ArchiveService.cleanTitleWithPatterns(manga2.title, loadedPatterns),
+      };
+
+      final count = await StorageService.batchUpdateMangaTitles(newTitlesMap);
+      expect(count, 2);
+
+      final updated = await StorageService.getMangaGroups();
+      expect(updated.firstWhere((g) => g.id == 'm1').title, 'Bleach');
+      expect(updated.firstWhere((g) => g.id == 'm2').title, 'Naruto');
+    });
   });
 }
