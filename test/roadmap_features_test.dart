@@ -198,5 +198,94 @@ void main() {
       final afterRemoved = await StorageService.loadBookmarks('manga_123');
       expect(afterRemoved, isEmpty);
     });
+
+    test('ReaderSettings smartMarginCrop setting round-trip', () {
+      const s1 = ReaderSettings(smartMarginCrop: true);
+      final json1 = s1.toJson();
+      expect(ReaderSettings.fromJson(json1).smartMarginCrop, isTrue);
+
+      const s2 = ReaderSettings(smartMarginCrop: false);
+      final json2 = s2.toJson();
+      expect(ReaderSettings.fromJson(json2).smartMarginCrop, isFalse);
+    });
+
+    test('StorageService Custom Shelves management round-trip', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      // Defaults
+      final defaultShelves = await StorageService.loadCustomShelves();
+      expect(defaultShelves, contains('Любимое'));
+      expect(defaultShelves, contains('Шедевры'));
+
+      // Add shelf
+      await StorageService.addShelf('Синглы');
+      final updated = await StorageService.loadCustomShelves();
+      expect(updated, contains('Синглы'));
+
+      // Toggle manga shelf
+      final manga = MangaGroup(
+        id: 'm_shelf_1',
+        title: 'Manga on Shelf',
+        shelves: [],
+        updatedAt: DateTime.now(),
+      );
+      await StorageService.saveMangaGroup(manga);
+
+      await StorageService.toggleMangaShelf('m_shelf_1', 'Синглы');
+      var loaded = await StorageService.getMangaGroups();
+      expect(loaded.firstWhere((g) => g.id == 'm_shelf_1').shelves, contains('Синглы'));
+
+      // Toggle off
+      await StorageService.toggleMangaShelf('m_shelf_1', 'Синглы');
+      loaded = await StorageService.getMangaGroups();
+      expect(loaded.firstWhere((g) => g.id == 'm_shelf_1').shelves, isNot(contains('Синглы')));
+
+      // Delete shelf
+      await StorageService.deleteShelf('Синглы');
+      final afterDelete = await StorageService.loadCustomShelves();
+      expect(afterDelete, isNot(contains('Синглы')));
+    });
+
+    test('Duplicate Finder discovers duplicate chapters and calculates wasted size', () {
+      final ch1 = ChapterItem(
+        id: '/tmp/ch1.zip',
+        filePath: '/tmp/ch1.zip',
+        title: 'Глава 1',
+        totalPages: 20,
+        lastPage: 0,
+        lastReadTime: DateTime.now(),
+        fileSize: 10485760, // 10 MB
+      );
+      final ch1Duplicate = ChapterItem(
+        id: '/tmp/ch1.cbz',
+        filePath: '/tmp/ch1.cbz',
+        title: 'Глава 1',
+        totalPages: 20,
+        lastPage: 0,
+        lastReadTime: DateTime.now(),
+        fileSize: 4194304, // 4 MB
+      );
+      final ch2 = ChapterItem(
+        id: '/tmp/ch2.zip',
+        filePath: '/tmp/ch2.zip',
+        title: 'Глава 2',
+        totalPages: 20,
+        lastPage: 0,
+        lastReadTime: DateTime.now(),
+        fileSize: 10485760,
+      );
+
+      final group = MangaGroup(
+        id: 'm_dup',
+        title: 'Berserk',
+        chapters: [ch1, ch1Duplicate, ch2],
+        updatedAt: DateTime.now(),
+      );
+
+      final duplicates = StorageService.findDuplicateChapters([group]);
+      expect(duplicates.length, 1);
+      expect(duplicates.first.duplicates.length, 2);
+      expect(duplicates.first.totalWastedBytes, 4194304); // smaller copy counted as waste
+    });
   });
 }

@@ -122,6 +122,7 @@ class _EditBookDialogState extends State<EditBookDialog> {
       title: newTitle.isNotEmpty ? newTitle : widget.book.title,
       author: newAuthor.isNotEmpty ? newAuthor : null,
       tags: _tags,
+      shelves: widget.book.shelves,
       status: _status,
     );
     await StorageService.updateBook(updated);

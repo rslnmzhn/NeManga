@@ -38,6 +38,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _showSizeInsteadOfCount = false;
   List<AuthorData> _authorsList = [];
   List<String> _authorBlacklist = [];
+  List<String> _customShelves = [];
+  String? _selectedShelf;
 
   @override
   void initState() {
@@ -92,6 +94,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final groups = await StorageService.getMangaGroups();
     final authorTags = await StorageService.loadAllAuthorTags();
     final blacklist = await StorageService.loadAuthorBlacklist();
+    final shelves = await StorageService.loadCustomShelves();
     final authors = StorageService.buildAuthorsList(
       allGroups: groups,
       authorTagsMap: authorTags,
@@ -104,6 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _allGroups = groups;
         _authorsList = authors;
         _authorBlacklist = blacklist;
+        _customShelves = shelves;
         _applyFilter();
       });
     }
@@ -123,6 +127,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _filteredGroups = _allGroups.where((group) {
       final matchesStatus = _selectedStatus == null || group.status == _selectedStatus;
       if (!matchesStatus) return false;
+
+      final matchesShelf = _selectedShelf == null || group.shelves.contains(_selectedShelf);
+      if (!matchesShelf) return false;
 
       if (tokens.isEmpty) return true;
 
@@ -212,7 +219,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final processedPaths = <String>[];
       int totalOriginal = 0;
       int totalCompressed = 0;
-      final groupTitle = ArchiveService.deriveMangaTitle(filePaths: validPaths);
+      final cleanupPatterns = await StorageService.loadTitleCleanupPatterns();
+      final derivedTitle = ArchiveService.deriveMangaTitle(filePaths: validPaths);
+      final groupTitle = ArchiveService.cleanTitleWithPatterns(derivedTitle, cleanupPatterns);
 
       if (choice.shouldCompress) {
         for (int i = 0; i < validPaths.length; i++) {
@@ -267,7 +276,8 @@ class _HomeScreenState extends State<HomeScreen> {
         // Один архив: открываем сразу
         final filePath = processedPaths.first;
         final info = await ArchiveService.loadManga(filePath);
-        final title = groupTitle.isNotEmpty && groupTitle != 'NeManga' ? groupTitle : info.title;
+        final rawTitle = groupTitle.isNotEmpty && groupTitle != 'NeManga' ? groupTitle : info.title;
+        final title = ArchiveService.cleanTitleWithPatterns(rawTitle, cleanupPatterns);
 
         final group = await StorageService.findOrCreateGroupForFile(
           filePath: filePath,
@@ -303,7 +313,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
         for (int i = 0; i < processedPaths.length; i++) {
           final path = processedPaths[i];
-          final title = p.basenameWithoutExtension(path);
+          final rawChTitle = p.basenameWithoutExtension(path);
+          final title = ArchiveService.cleanTitleWithPatterns(rawChTitle, cleanupPatterns);
           final size = File(path).existsSync() ? File(path).lengthSync() : 0;
 
           if (i == 0) {
@@ -1092,6 +1103,244 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _showDuplicateFinderDialog() async {
+    final duplicates = StorageService.findDuplicateChapters(_allGroups);
+    final primary = _settings.accentColor.color;
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final totalWasted = duplicates.fold<int>(0, (sum, d) => sum + d.totalWastedBytes);
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+            title: Row(
+              children: [
+                Icon(Icons.find_replace_rounded, color: primary, size: 24),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Поиск дубликатов архивов',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: duplicates.isEmpty
+                  ? const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(height: 16),
+                        Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 48),
+                        SizedBox(height: 12),
+                        Text(
+                          'Дубликатов архивов не найдено!',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Ваша библиотека и папки в полном порядке.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        SizedBox(height: 16),
+                      ],
+                    )
+                  : SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Найдено групп дубликатов: ${duplicates.length} • Лишний объём: ${_formatFileSize(totalWasted)}',
+                            style: const TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 12),
+                          ...duplicates.map((cluster) {
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF13151B),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    cluster.duplicates.first.mangaTitle,
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Глава: ${cluster.title}',
+                                    style: TextStyle(fontSize: 11, color: primary),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ...cluster.duplicates.map((dup) {
+                                    final ext = p.extension(dup.chapter.filePath).toUpperCase();
+                                    return Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 2),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              '[$ext] ${_formatFileSize(dup.chapter.fileSize)} • ${p.basename(dup.chapter.filePath)}',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(fontSize: 11, color: Colors.white70),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                                            visualDensity: VisualDensity.compact,
+                                            onPressed: () async {
+                                              await StorageService.deleteDuplicateChapter(dup.groupId, dup.chapter.filePath);
+                                              await _loadData();
+                                              Navigator.pop(ctx);
+                                              _showDuplicateFinderDialog();
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Закрыть'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showManageMangaShelvesDialog(MangaGroup group) {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final primary = _settings.accentColor.color;
+          final currentGroup = _allGroups.firstWhere((g) => g.id == group.id, orElse: () => group);
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
+              children: [
+                Icon(Icons.folder_special_outlined, color: primary, size: 22),
+                const SizedBox(width: 10),
+                const Text('Полки манги', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Тайтл: ${currentGroup.title}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_customShelves.isEmpty)
+                    const Text('Пока нет созданных полок.')
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _customShelves.map((shelf) {
+                        final isAttached = currentGroup.shelves.contains(shelf);
+                        return FilterChip(
+                          selected: isAttached,
+                          selectedColor: primary.withValues(alpha: 0.25),
+                          label: Text(shelf),
+                          onSelected: (_) async {
+                            await StorageService.toggleMangaShelf(currentGroup.id, shelf);
+                            await _loadData();
+                            setDialogState(() {});
+                          },
+                        );
+                      }).toList(),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Готово'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showCreateShelfDialog(BuildContext parentCtx, StateSetter parentSetState) {
+    final controller = TextEditingController();
+    showDialog(
+      context: parentCtx,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Создать полку', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: 'Название полки (напр. Шедевры)...',
+            filled: true,
+            fillColor: const Color(0xFF242833),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          ElevatedButton(
+            onPressed: () async {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                await StorageService.addShelf(name);
+                final updated = await StorageService.loadCustomShelves();
+                parentSetState(() {
+                  _customShelves = updated;
+                });
+                setState(() {
+                  _customShelves = updated;
+                });
+              }
+              Navigator.pop(ctx);
+            },
+            child: const Text('Создать'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showBatchRenameDialog() async {
     final savedPatterns = await StorageService.loadTitleCleanupPatterns();
     final currentPatterns = List<String>.from(savedPatterns);
@@ -1523,7 +1772,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.more_vert),
             color: const Color(0xFF1B1E26),
             onSelected: (val) {
-              if (val == 'reading_stats') {
+              if (val == 'duplicates') {
+                _showDuplicateFinderDialog();
+              } else if (val == 'reading_stats') {
                 _showReadingStatsDialog();
               } else if (val == 'batch_rename') {
                 _showBatchRenameDialog();
@@ -1540,6 +1791,16 @@ class _HomeScreenState extends State<HomeScreen> {
               }
             },
             itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'duplicates',
+                child: Row(
+                  children: [
+                    Icon(Icons.find_replace_rounded, size: 18, color: Colors.orangeAccent),
+                    SizedBox(width: 10),
+                    Text('Поиск дубликатов архивов'),
+                  ],
+                ),
+              ),
               const PopupMenuItem(
                 value: 'reading_stats',
                 child: Row(
@@ -1865,43 +2126,104 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showFilterDialog() {
+    final primary = _settings.accentColor.color;
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1B1E26),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Фильтры статуса', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            RadioListTile<ReadingStatus?>(
-              title: const Text('Все статусы'),
-              value: null,
-              groupValue: _selectedStatus,
-              onChanged: (val) {
-                setState(() {
-                  _selectedStatus = null;
-                  _applyFilter();
-                });
-                Navigator.pop(ctx);
-              },
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Фильтры библиотеки', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Статус прочтения:', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  RadioListTile<ReadingStatus?>(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Все статусы'),
+                    value: null,
+                    groupValue: _selectedStatus,
+                    onChanged: (val) {
+                      setState(() {
+                        _selectedStatus = null;
+                        _applyFilter();
+                      });
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                  ...ReadingStatus.values.where((s) => s != ReadingStatus.none).map((s) {
+                    return RadioListTile<ReadingStatus?>(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(s.label),
+                      value: s,
+                      groupValue: _selectedStatus,
+                      onChanged: (val) {
+                        setState(() {
+                          _selectedStatus = val;
+                          _applyFilter();
+                        });
+                        Navigator.pop(ctx);
+                      },
+                    );
+                  }),
+                  const Divider(color: Colors.white12, height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Полки и коллекции:', style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.bold)),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline, size: 20, color: Colors.amber),
+                        tooltip: 'Создать полку',
+                        onPressed: () {
+                          _showCreateShelfDialog(ctx, setDialogState);
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Все полки'),
+                        selected: _selectedShelf == null,
+                        onSelected: (_) {
+                          setState(() {
+                            _selectedShelf = null;
+                            _applyFilter();
+                          });
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                      ..._customShelves.map((shelf) {
+                        final isSel = _selectedShelf == shelf;
+                        return ChoiceChip(
+                          avatar: Icon(Icons.bookmark_outline, size: 14, color: isSel ? Colors.white : primary),
+                          label: Text(shelf),
+                          selected: isSel,
+                          onSelected: (_) {
+                            setState(() {
+                              _selectedShelf = isSel ? null : shelf;
+                              _applyFilter();
+                            });
+                            Navigator.pop(ctx);
+                          },
+                        );
+                      }),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            ...ReadingStatus.values.where((s) => s != ReadingStatus.none).map((s) {
-              return RadioListTile<ReadingStatus?>(
-                title: Text(s.label),
-                value: s,
-                groupValue: _selectedStatus,
-                onChanged: (val) {
-                  setState(() {
-                    _selectedStatus = val;
-                    _applyFilter();
-                  });
-                  Navigator.pop(ctx);
-                },
-              );
-            }),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -2331,6 +2653,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           onSelected: (val) {
                             if (val == 'open') {
                               _openMangaDetail(group);
+                            } else if (val == 'shelves') {
+                              _showManageMangaShelvesDialog(group);
                             } else if (val == 'edit') {
                               EditBookDialog.show(
                                 context,
@@ -2343,6 +2667,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   lastReadTime: group.updatedAt,
                                   fileSize: group.totalSize,
                                   tags: group.tags,
+                                  shelves: group.shelves,
                                   coverPath: group.coverPath,
                                   status: group.status,
                                 ),
@@ -2383,6 +2708,16 @@ class _HomeScreenState extends State<HomeScreen> {
                                   Icon(Icons.menu_book, size: 18, color: Colors.white70),
                                   SizedBox(width: 10),
                                   Text('Открыть тайтл', style: TextStyle(color: Colors.white)),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'shelves',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.folder_special_outlined, size: 18, color: Colors.amber),
+                                  SizedBox(width: 10),
+                                  Text('Полки / Коллекции', style: TextStyle(color: Colors.white)),
                                 ],
                               ),
                             ),

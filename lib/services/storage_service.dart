@@ -46,6 +46,7 @@ class StorageService {
   static const String _keyTitleCleanupPatterns = 'nemanga_title_cleanup_patterns';
   static const String _keyReadingStats = 'nemanga_reading_stats';
   static const String _keyBookmarks = 'nemanga_manga_bookmarks';
+  static const String _keyCustomShelves = 'nemanga_custom_shelves';
 
   /// Загрузка сохранённых настроек ридера
   static Future<ReaderSettings> loadSettings() async {
@@ -218,14 +219,16 @@ class StorageService {
       fileSize: fileSize,
     );
 
+    final cleanupPatterns = await loadTitleCleanupPatterns();
+    final cleanTitle = ArchiveService.cleanTitleWithPatterns(title, cleanupPatterns);
     final comicInfo = await ArchiveService.extractComicInfo(filePath);
-    final detectedAuthor = AuthorDetector.detectAuthor(title);
+    final detectedAuthor = AuthorDetector.detectAuthor(cleanTitle);
     final finalAuthor = comicInfo?.author ?? detectedAuthor;
     final finalTags = comicInfo?.tags ?? [];
 
     final newGroup = MangaGroup(
       id: filePath,
-      title: title,
+      title: cleanTitle,
       author: finalAuthor,
       tags: finalTags,
       coverPath: coverPath,
@@ -374,6 +377,7 @@ class StorageService {
         title: updated.title,
         author: updated.author,
         tags: updated.tags,
+        shelves: updated.shelves,
         status: updated.status,
         updatedAt: DateTime.now(),
       );
@@ -571,6 +575,111 @@ class StorageService {
     return added;
   }
 
+  /// Загрузить список пользовательских полок
+  static Future<List<String>> loadCustomShelves() async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(_keyCustomShelves);
+    if (list != null && list.isNotEmpty) return list;
+    return ['Любимое', 'Шедевры', 'На перечитку'];
+  }
+
+  /// Сохранить список полок
+  static Future<void> saveCustomShelves(List<String> list) async {
+    final prefs = await SharedPreferences.getInstance();
+    final clean = list.map((s) => s.trim()).where((s) => s.isNotEmpty).toSet().toList();
+    await prefs.setStringList(_keyCustomShelves, clean);
+  }
+
+  /// Добавить полку
+  static Future<void> addShelf(String name) async {
+    final current = await loadCustomShelves();
+    final clean = name.trim();
+    if (clean.isNotEmpty && !current.contains(clean)) {
+      current.add(clean);
+      await saveCustomShelves(current);
+    }
+  }
+
+  /// Удалить полку
+  static Future<void> deleteShelf(String name) async {
+    final current = await loadCustomShelves();
+    current.remove(name.trim());
+    await saveCustomShelves(current);
+
+    final groups = await getMangaGroups();
+    final updated = groups.map((g) {
+      if (g.shelves.contains(name)) {
+        return g.copyWith(
+          shelves: g.shelves.where((s) => s != name).toList(),
+          updatedAt: DateTime.now(),
+        );
+      }
+      return g;
+    }).toList();
+    await saveAllGroups(updated);
+  }
+
+  /// Переключить наличие тайтла на полке
+  static Future<void> toggleMangaShelf(String mangaId, String shelfName) async {
+    final groups = await getMangaGroups();
+    final idx = groups.indexWhere((g) => g.id == mangaId);
+    if (idx == -1) return;
+
+    final group = groups[idx];
+    final shelves = List<String>.from(group.shelves);
+    if (shelves.contains(shelfName)) {
+      shelves.remove(shelfName);
+    } else {
+      shelves.add(shelfName);
+    }
+
+    final updated = group.copyWith(shelves: shelves, updatedAt: DateTime.now());
+    await saveMangaGroup(updated);
+  }
+
+  /// Поиск повторяющихся глав манги в библиотеке
+  static List<DuplicateCluster> findDuplicateChapters(List<MangaGroup> groups) {
+    final clustersMap = <String, List<DuplicateChapterItem>>{};
+
+    for (final group in groups) {
+      for (final chapter in group.chapters) {
+        final simpleTitle = p.basenameWithoutExtension(chapter.filePath).toLowerCase().trim().replaceAll(RegExp(r'[\s_\-]+'), ' ');
+        final key = '${group.title.toLowerCase().trim()}_$simpleTitle';
+
+        clustersMap.putIfAbsent(key, () => []).add(
+          DuplicateChapterItem(
+            groupId: group.id,
+            mangaTitle: group.title,
+            chapter: chapter,
+          ),
+        );
+      }
+    }
+
+    return clustersMap.entries
+        .where((e) => e.value.length > 1)
+        .map((e) => DuplicateCluster(title: e.value.first.chapter.title, duplicates: e.value))
+        .toList();
+  }
+
+  /// Удалить дублирующую главу
+  static Future<void> deleteDuplicateChapter(String groupId, String filePath) async {
+    final groups = await getMangaGroups();
+    final idx = groups.indexWhere((g) => g.id == groupId);
+    if (idx != -1) {
+      final group = groups[idx];
+      final newChapters = group.chapters.where((c) => c.filePath != filePath).toList();
+      final updated = group.copyWith(chapters: newChapters, updatedAt: DateTime.now());
+      await saveMangaGroup(updated);
+    }
+    try {
+      final file = File(filePath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
+
   /// Агрегировать список авторов со всеми тайтлами, обложками и тегами
   static List<AuthorData> buildAuthorsList({
     required List<MangaGroup> allGroups,
@@ -701,8 +810,11 @@ class StorageService {
       groupsMap.putIfAbsent(groupName, () => []).add(f);
     }
 
+    final cleanupPatterns = await loadTitleCleanupPatterns();
+
     for (final entry in groupsMap.entries) {
-      final title = entry.key;
+      final rawTitle = entry.key;
+      final title = ArchiveService.cleanTitleWithPatterns(rawTitle, cleanupPatterns);
       final files = entry.value;
       files.sort((a, b) => ArchiveService.naturalCompare(p.basename(a.path), p.basename(b.path)));
 
@@ -710,7 +822,8 @@ class StorageService {
       String? cover;
       for (int i = 0; i < files.length; i++) {
         final f = files[i];
-        final chTitle = p.basenameWithoutExtension(f.path);
+        final rawChTitle = p.basenameWithoutExtension(f.path);
+        final chTitle = ArchiveService.cleanTitleWithPatterns(rawChTitle, cleanupPatterns);
         final size = f.existsSync() ? f.lengthSync() : 0;
         final isOpt = f.path.toLowerCase().endsWith('.cbz');
         if (i == 0) {

@@ -162,6 +162,7 @@ class ReaderSettings {
   final bool hapticFeedback;
   final bool dualPage;
   final bool splitDoublePages;   // автоматический сплит горизонтальных разворотов
+  final bool smartMarginCrop;    // умная обрезка технических полей
   final double customBrightness; // 0.0 .. 0.8 затемнение
   final bool warmFilter;         // тёплый ночной фильтр
   final AppThemeMode appTheme;
@@ -180,6 +181,7 @@ class ReaderSettings {
     this.hapticFeedback = true,
     this.dualPage = false,
     this.splitDoublePages = true,
+    this.smartMarginCrop = false,
     this.customBrightness = 0.0,
     this.warmFilter = false,
     this.appTheme = AppThemeMode.darkSlate,
@@ -199,6 +201,7 @@ class ReaderSettings {
     bool? hapticFeedback,
     bool? dualPage,
     bool? splitDoublePages,
+    bool? smartMarginCrop,
     double? customBrightness,
     bool? warmFilter,
     AppThemeMode? appTheme,
@@ -217,6 +220,7 @@ class ReaderSettings {
       hapticFeedback: hapticFeedback ?? this.hapticFeedback,
       dualPage: dualPage ?? this.dualPage,
       splitDoublePages: splitDoublePages ?? this.splitDoublePages,
+      smartMarginCrop: smartMarginCrop ?? this.smartMarginCrop,
       customBrightness: customBrightness ?? this.customBrightness,
       warmFilter: warmFilter ?? this.warmFilter,
       appTheme: appTheme ?? this.appTheme,
@@ -238,6 +242,7 @@ class ReaderSettings {
       'hapticFeedback': hapticFeedback,
       'dualPage': dualPage,
       'splitDoublePages': splitDoublePages,
+      'smartMarginCrop': smartMarginCrop,
       'customBrightness': customBrightness,
       'warmFilter': warmFilter,
       'appTheme': appTheme.index,
@@ -259,6 +264,7 @@ class ReaderSettings {
       hapticFeedback: map['hapticFeedback'] ?? true,
       dualPage: map['dualPage'] ?? false,
       splitDoublePages: map['splitDoublePages'] ?? true,
+      smartMarginCrop: map['smartMarginCrop'] ?? false,
       customBrightness: (map['customBrightness'] as num?)?.toDouble() ?? 0.0,
       warmFilter: map['warmFilter'] ?? false,
       appTheme: AppThemeMode.values[(map['appTheme'] ?? 0).clamp(0, AppThemeMode.values.length - 1)],
@@ -550,6 +556,7 @@ class MangaGroup {
   final String? coverPath;
   final ReadingStatus status;
   final List<String> tags;
+  final List<String> shelves;
   final List<ChapterItem> chapters;
   final int currentChapterIndex;
   final DateTime updatedAt;
@@ -561,6 +568,7 @@ class MangaGroup {
     this.coverPath,
     this.status = ReadingStatus.reading,
     this.tags = const [],
+    this.shelves = const [],
     this.chapters = const [],
     this.currentChapterIndex = 0,
     required this.updatedAt,
@@ -624,6 +632,7 @@ class MangaGroup {
     String? coverPath,
     ReadingStatus? status,
     List<String>? tags,
+    List<String>? shelves,
     List<ChapterItem>? chapters,
     int? currentChapterIndex,
     DateTime? updatedAt,
@@ -635,6 +644,7 @@ class MangaGroup {
       coverPath: coverPath ?? this.coverPath,
       status: status ?? this.status,
       tags: tags ?? this.tags,
+      shelves: shelves ?? this.shelves,
       chapters: chapters ?? this.chapters,
       currentChapterIndex: currentChapterIndex ?? this.currentChapterIndex,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -649,6 +659,7 @@ class MangaGroup {
       'coverPath': coverPath,
       'status': status.index,
       'tags': tags,
+      'shelves': shelves,
       'chapters': chapters.map((c) => c.toMap()).toList(),
       'currentChapterIndex': currentChapterIndex,
       'updatedAt': updatedAt.millisecondsSinceEpoch,
@@ -663,6 +674,7 @@ class MangaGroup {
       coverPath: map['coverPath'],
       status: ReadingStatus.values[(map['status'] ?? 1).clamp(0, ReadingStatus.values.length - 1)],
       tags: (map['tags'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+      shelves: (map['shelves'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
       chapters: (map['chapters'] as List<dynamic>?)
               ?.map((c) => ChapterItem.fromMap(Map<String, dynamic>.from(c)))
               .toList() ??
@@ -690,6 +702,7 @@ class BookMetadata {
   final int fileSize;
   final String? coverPath;
   final List<String> tags;
+  final List<String> shelves;
   final bool isOptimized;
   final ReadingStatus status;
 
@@ -703,6 +716,7 @@ class BookMetadata {
     required this.fileSize,
     this.coverPath,
     this.tags = const [],
+    this.shelves = const [],
     this.isOptimized = false,
     this.status = ReadingStatus.reading,
   });
@@ -717,6 +731,7 @@ class BookMetadata {
     int? fileSize,
     String? coverPath,
     List<String>? tags,
+    List<String>? shelves,
     bool? isOptimized,
     ReadingStatus? status,
   }) {
@@ -730,6 +745,7 @@ class BookMetadata {
       fileSize: fileSize ?? this.fileSize,
       coverPath: coverPath ?? this.coverPath,
       tags: tags ?? this.tags,
+      shelves: shelves ?? this.shelves,
       isOptimized: isOptimized ?? this.isOptimized,
       status: status ?? this.status,
     );
@@ -753,6 +769,7 @@ class BookMetadata {
       coverPath: coverPath,
       status: status,
       tags: tags,
+      shelves: shelves,
       chapters: [chapter],
       currentChapterIndex: 0,
       updatedAt: lastReadTime,
@@ -886,4 +903,34 @@ class ReadingUserStats {
   String toJson() => json.encode(toMap());
   factory ReadingUserStats.fromJson(String source) =>
       ReadingUserStats.fromMap(json.decode(source));
+}
+
+/// Элемент дубликата для Duplicate Finder
+class DuplicateChapterItem {
+  final String groupId;
+  final String mangaTitle;
+  final ChapterItem chapter;
+
+  const DuplicateChapterItem({
+    required this.groupId,
+    required this.mangaTitle,
+    required this.chapter,
+  });
+}
+
+/// Группа дубликатов одной главы
+class DuplicateCluster {
+  final String title;
+  final List<DuplicateChapterItem> duplicates;
+
+  const DuplicateCluster({
+    required this.title,
+    required this.duplicates,
+  });
+
+  int get totalWastedBytes {
+    if (duplicates.length <= 1) return 0;
+    final sizes = duplicates.map((d) => d.chapter.fileSize).toList()..sort();
+    return sizes.sublist(0, sizes.length - 1).fold(0, (a, b) => a + b);
+  }
 }

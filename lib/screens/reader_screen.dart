@@ -946,30 +946,43 @@ class _ReaderScreenState extends State<ReaderScreen> {
             final ratio = _pageRatios[index] ?? 1.414;
             final expectedHeight = screenWidth * ratio;
 
+            final cacheW = (screenWidth * 2).toInt();
+            Widget pageWidget = Image.file(
+              File(filePath),
+              fit: _getImageFit(),
+              width: screenWidth,
+              cacheWidth: cacheW > 0 ? cacheW : null,
+              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                return child;
+              },
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  height: expectedHeight > 0 ? expectedHeight : 250,
+                  color: Colors.grey[900],
+                  child: Center(
+                    child: Text(
+                      'Ошибка загрузки стр. ${index + 1}',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                );
+              },
+            );
+
+            if (_settings.smartMarginCrop) {
+              pageWidget = ClipRect(
+                child: Transform.scale(
+                  scale: 1.07,
+                  child: pageWidget,
+                ),
+              );
+            }
+
             return InteractiveViewer(
               minScale: 1.0,
               maxScale: 3.5,
               panEnabled: true,
-              child: Image.file(
-                File(filePath),
-                fit: _getImageFit(),
-                width: screenWidth,
-                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                  return child;
-                },
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    height: expectedHeight > 0 ? expectedHeight : 250,
-                    color: Colors.grey[900],
-                    child: Center(
-                      child: Text(
-                        'Ошибка загрузки стр. ${index + 1}',
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    ),
-                  );
-                },
-              ),
+              child: pageWidget,
             );
           },
         );
@@ -1080,6 +1093,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         final subPage = _displayPages[index];
         final filePath = subPage.filePath;
 
+        final cacheW = (MediaQuery.of(context).size.width * 2).toInt();
         Widget pageImage;
         if (subPage.isRightHalf || subPage.isLeftHalf) {
           pageImage = ClipRect(
@@ -1089,6 +1103,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               child: Image.file(
                 File(filePath),
                 fit: _getImageFit(),
+                cacheWidth: cacheW > 0 ? cacheW : null,
               ),
             ),
           );
@@ -1096,6 +1111,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
           pageImage = Image.file(
             File(filePath),
             fit: _getImageFit(),
+            cacheWidth: cacheW > 0 ? cacheW : null,
+          );
+        }
+
+        if (_settings.smartMarginCrop) {
+          pageImage = ClipRect(
+            child: Transform.scale(
+              scale: 1.07,
+              child: pageImage,
+            ),
           );
         }
 

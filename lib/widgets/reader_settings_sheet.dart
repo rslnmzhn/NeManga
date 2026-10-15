@@ -232,6 +232,15 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                 _update(_current.copyWith(splitDoublePages: val));
               },
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Обрезка технических полей'),
+              subtitle: const Text('Автоматически приближать рисунок, убирая пустые края'),
+              value: _current.smartMarginCrop,
+              onChanged: (val) {
+                _update(_current.copyWith(smartMarginCrop: val));
+              },
+            ),
             const SizedBox(height: 16),
 
             // Ночной режим и яркость
