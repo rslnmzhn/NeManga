@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">NeManga — Неко и манга</title>
+  <desc id="desc">Новая иконка: белая неко с розовыми ушками читает раскрытую мангу на тёмном фоне с янтарным ореолом.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#262333"/><stop offset="1" stop-color="#0B0E16"/></linearGradient>
+    <linearGradient id="halo" x2="0" y2="1"><stop stop-color="#FFC871"/><stop offset="1" stop-color="#ED8C68"/></linearGradient>
+    <linearGradient id="fur" x2="0" y2="1"><stop stop-color="#FFF9EF"/><stop offset="1" stop-color="#DDD8EB"/></linearGradient>
+    <linearGradient id="pink" x2="1" y2="1"><stop stop-color="#FFA4BC"/><stop offset="1" stop-color="#E56C97"/></linearGradient>
+    <linearGradient id="book" x2="0" y2="1"><stop stop-color="#9E91E0"/><stop offset="1" stop-color="#685AA6"/></linearGradient>
+  </defs>
+  <!-- Self-contained vector artwork, no external images or fonts. -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <rect x="24" y="24" width="976" height="976" rx="204" fill="none" stroke="#FFFFFF" stroke-opacity=".07" stroke-width="3"/>
+  <circle cx="512" cy="438" r="287" fill="url(#halo)"/>
+  <circle cx="512" cy="438" r="310" fill="none" stroke="#FFC871" stroke-opacity=".17" stroke-width="3"/>
+  <ellipse cx="512" cy="828" rx="283" ry="40" fill="#05080F" opacity=".6"/>
+  <!-- Cat silhouette and ears. -->
+  <path d="M291 399 270 206Q266 182 291 192L423 280Q512 248 601 280L733 192Q758 182 754 206L733 399Q766 450 747 527Q725 618 622 647H402Q299 618 277 527Q258 450 291 399Z" fill="url(#fur)" stroke="#302638" stroke-width="16" stroke-linejoin="round"/>
+  <path d="m304 239 15 135 71-78Z" fill="url(#pink)"/>
+  <path d="m720 239-15 135-71-78Z" fill="url(#pink)"/>
+  <!-- Forelock. -->
+  <path d="M434 282q-10 42 28 68l18-33q12 30 39 42l12-41q18 19 41 23l-12-62" fill="#B9AFD8"/>
+  <!-- Relaxed, reading eyes. -->
+  <path d="M348 451q42-43 85 0M591 451q42-43 85 0" fill="none" stroke="#302638" stroke-width="20" stroke-linecap="round"/>
+  <ellipse cx="352" cy="497" rx="39" ry="20" fill="#ED91B2" opacity=".65"/>
+  <ellipse cx="672" cy="497" rx="39" ry="20" fill="#ED91B2" opacity=".65"/>
+  <path d="M499 483q13-10 26 0l-13 14Z" fill="#925B77"/>
+  <path d="M512 497v12q-18 26-36 4m36-4q18 26 36 4" fill="none" stroke="#514054" stroke-width="9" stroke-linecap="round"/>
+  <path d="m298 479-34-9m36 38-34 5m460-34 34-9m-36 38 34 5" stroke="#6D607A" stroke-width="7" stroke-linecap="round"/>
+  <!-- Open book: strong outline remains legible at launcher size. -->
+  <path d="M231 582q143-32 281 31 138-63 281-31v220q-139-23-281 35-142-58-281-35Z" fill="url(#book)" stroke="#302638" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M257 571q123-22 255 40v191q-126-55-255-32Zm510 0q-123-22-255 40v191q126-55 255-32Z" fill="#FFF5E6" stroke="#302638" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M512 617v188" stroke="#CBBBC9" stroke-width="7"/>
+  <!-- Manga panels, deliberately minimal. -->
+  <path d="m287 606 89 6v65l-89-10Zm108 11 85 26v61l-85-23Z" fill="#D8CFEA" stroke="#8A7C9C" stroke-width="5"/>
+  <path d="m289 696 190 37v38l-190-36Z" fill="#F3D1D5"/>
+  <path d="m544 642 191-36v103l-191 39Z" fill="#E7DAED" stroke="#8A7C9C" stroke-width="5"/>
+  <path d="m563 724 46-57 29 22 31-48 43 55Z" fill="#A79AC6"/>
+  <path d="m548 770 68-15m18-4 96-19" stroke="#B29BB8" stroke-width="8" stroke-linecap="round"/>
+  <!-- Bookmark and paws. -->
+  <path d="m691 581 26-4v88l-13-9-13 14Z" fill="#ED7EA4"/>
+  <path d="M235 644q-28 0-29 35t33 38h28q25-3 22-28t-26-45Z" fill="url(#fur)" stroke="#302638" stroke-width="10"/>
+  <path d="M789 644q28 0 29 35t-33 38h-28q-25-3-22-28t26-45Z" fill="url(#fur)" stroke="#302638" stroke-width="10"/>
+  <path d="M237 674v17m20-17v17m510-17v17m20-17v17" stroke="#B3A4BF" stroke-width="6" stroke-linecap="round"/>
+  <!-- Small accents, kept away from the face. -->
+  <path d="m189 358 10 24 24 10-24 10-10 24-10-24-24-10 24-10Z" fill="#FFD083"/>
+  <path d="m833 292 8 20 20 8-20 8-8 20-8-20-20-8 20-8Z" fill="#FFB0C8"/>
+  <circle cx="807" cy="465" r="9" fill="#FFD083"/>
+  <circle cx="211" cy="510" r="6" fill="#A99AD8"/>
+</svg>

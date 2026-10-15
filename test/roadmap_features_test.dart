@@ -287,5 +287,89 @@ void main() {
       expect(duplicates.first.duplicates.length, 2);
       expect(duplicates.first.totalWastedBytes, 4194304); // smaller copy counted as waste
     });
+
+    test('StorageService Backup v2 exports and imports full metadata ecosystem', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      await StorageService.saveCustomShelves(['Шедевры', 'Синглы']);
+      await StorageService.saveAuthorTags('Kentaro Miura', ['Тёмное фэнтези']);
+      await StorageService.saveAuthorBlacklist(['bad-author*']);
+      await StorageService.saveTitleCleanupPatterns(['mangasite-*']);
+
+      final backupData = {
+        'version': 2,
+        'exportedAt': DateTime.now().toIso8601String(),
+        'settings': const ReaderSettings(appTheme: AppThemeMode.amoled).toMap(),
+        'shelves': ['Шедевры', 'Синглы'],
+        'authorTags': {'Kentaro Miura': ['Тёмное фэнтези']},
+        'authorBlacklist': ['bad-author*'],
+        'titleCleanupPatterns': ['mangasite-*'],
+        'readingStats': const ReadingUserStats(totalPagesRead: 120, totalReadingSeconds: 3600).toMap(),
+        'groups': [
+          MangaGroup(
+            id: 'g_v2',
+            title: 'Berserk',
+            author: 'Kentaro Miura',
+            shelves: ['Шедевры'],
+            tags: ['Тёмное фэнтези'],
+            updatedAt: DateTime.now(),
+          ).toMap(),
+        ],
+      };
+
+      final jsonStr = json.encode(backupData);
+      final count = await StorageService.importBackupFromJson(jsonStr);
+      expect(count, 1);
+
+      // Verify full restore
+      final shelves = await StorageService.loadCustomShelves();
+      expect(shelves, contains('Шедевры'));
+      expect(shelves, contains('Синглы'));
+
+      final authorTags = await StorageService.loadAllAuthorTags();
+      expect(authorTags['Kentaro Miura'], contains('Тёмное фэнтези'));
+
+      final blacklist = await StorageService.loadAuthorBlacklist();
+      expect(blacklist, contains('bad-author*'));
+
+      final patterns = await StorageService.loadTitleCleanupPatterns();
+      expect(patterns, contains('mangasite-*'));
+
+      final stats = await StorageService.loadReadingStats();
+      expect(stats.totalPagesRead, 120);
+      expect(stats.totalReadingSeconds, 3600);
+
+      final groups = await StorageService.getMangaGroups();
+      expect(groups.first.shelves, contains('Шедевры'));
+      expect(groups.first.tags, contains('Тёмное фэнтези'));
+    });
+
+    test('Chapter gap detection identifies missing chapters in sequence', () {
+      List<int> detectChapterGaps(List<String> titles) {
+        final nums = <int>[];
+        for (final t in titles) {
+          final matches = RegExp(r'(?:ch|chapter|глава|том|vol)?\s*(\d+)', caseSensitive: false).allMatches(t);
+          if (matches.isNotEmpty) {
+            final parsed = int.tryParse(matches.last.group(1) ?? '');
+            if (parsed != null) nums.add(parsed);
+          }
+        }
+        if (nums.length < 2) return [];
+        final gaps = <int>[];
+        for (int i = 0; i < nums.length - 1; i++) {
+          final diff = nums[i + 1] - nums[i];
+          if (diff > 1 && diff < 15) {
+            for (int m = nums[i] + 1; m < nums[i + 1]; m++) {
+              gaps.add(m);
+            }
+          }
+        }
+        return gaps;
+      }
+
+      expect(detectChapterGaps(['Глава 1', 'Глава 2', 'Глава 4']), [3]);
+      expect(detectChapterGaps(['Vol 1 Ch 10', 'Vol 1 Ch 13']), [11, 12]);
+      expect(detectChapterGaps(['Ch 1', 'Ch 2', 'Ch 3']), isEmpty);
+    });
   });
 }

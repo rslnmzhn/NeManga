@@ -2,6 +2,7 @@ import 'author_detail_screen.dart';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import '../models/reader_models.dart';
 import '../services/archive_service.dart';
@@ -40,6 +41,8 @@ class _HomeScreenState extends State<HomeScreen> {
   List<String> _authorBlacklist = [];
   List<String> _customShelves = [];
   String? _selectedShelf;
+  final Set<String> _selectedGroupIds = {};
+  bool get _isMultiSelectMode => _selectedGroupIds.isNotEmpty;
 
   @override
   void initState() {
@@ -138,6 +141,23 @@ class _HomeScreenState extends State<HomeScreen> {
       final tagsLower = group.tags.map((t) => t.toLowerCase()).toList();
 
       return tokens.every((token) {
+        if (token.startsWith('автор:') || token.startsWith('author:')) {
+          final q = token.substring(token.indexOf(':') + 1);
+          return authorLower.contains(q);
+        }
+        if (token.startsWith('полка:') || token.startsWith('shelf:')) {
+          final q = token.substring(token.indexOf(':') + 1);
+          return group.shelves.any((s) => s.toLowerCase().contains(q));
+        }
+        if (token.startsWith('жанр:') || token.startsWith('tag:')) {
+          final q = token.substring(token.indexOf(':') + 1);
+          return tagsLower.any((t) => t.contains(q));
+        }
+        if (token.startsWith('статус:') || token.startsWith('status:')) {
+          final q = token.substring(token.indexOf(':') + 1);
+          return group.status.label.toLowerCase().contains(q);
+        }
+
         final matchesTitle = titleLower.contains(token);
         final matchesAuthor = authorLower.contains(token);
         final matchesTag = tagsLower.any((tag) => tag.contains(token));
@@ -1103,6 +1123,215 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildQuickActionsBar(Color primary) {
+    if (_allGroups.isEmpty) return const SizedBox.shrink();
+
+    final latestManga = _allGroups.first;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () => _openReaderDirect(latestManga),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: primary.withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.play_circle_fill_rounded, color: primary, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Продолжить чтение', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                          Text(
+                            latestManga.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          InkWell(
+            onTap: _openRandomManga,
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF161920),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.casino_outlined, color: Colors.amber, size: 18),
+                  SizedBox(width: 6),
+                  Text('Случайная', style: TextStyle(fontSize: 12, color: Colors.white70)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openRandomManga() {
+    if (_allGroups.isEmpty) return;
+    final unread = _allGroups.where((g) => !g.isCompleted).toList();
+    final pool = unread.isNotEmpty ? unread : _allGroups;
+    final randomManga = (List<MangaGroup>.from(pool)..shuffle()).first;
+    _openMangaDetail(randomManga);
+  }
+
+  Future<void> _showHealthCheckDialog() async {
+    final missingList = <({MangaGroup manga, ChapterItem chapter})>[];
+
+    for (final group in _allGroups) {
+      for (final ch in group.chapters) {
+        if (!File(ch.filePath).existsSync()) {
+          missingList.add((manga: group, chapter: ch));
+        }
+      }
+    }
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+            title: const Row(
+              children: [
+                Icon(Icons.health_and_safety_outlined, color: Colors.tealAccent, size: 24),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text('Проверка библиотеки', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: missingList.isEmpty
+                  ? const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(height: 16),
+                        Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 48),
+                        SizedBox(height: 12),
+                        Text(
+                          'Все файлы на месте!',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Потерянных или повреждённых архивов не обнаружено.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        SizedBox(height: 16),
+                      ],
+                    )
+                  : SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Обнаружено потерянных архивов: ${missingList.length}',
+                            style: const TextStyle(fontSize: 12, color: Colors.redAccent, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 12),
+                          ...missingList.map((item) {
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF13151B),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    item.manga.title,
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
+                                  ),
+                                  Text(
+                                    'Глава: ${item.chapter.title}',
+                                    style: const TextStyle(fontSize: 11, color: Colors.amber),
+                                  ),
+                                  Text(
+                                    'Файл: ${item.chapter.filePath}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 10, color: Colors.grey),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                      foregroundColor: Colors.greenAccent,
+                                      side: const BorderSide(color: Colors.greenAccent),
+                                    ),
+                                    icon: const Icon(Icons.folder_open, size: 16),
+                                    label: const Text('Указать новый файл'),
+                                    onPressed: () async {
+                                      final res = await FilePicker.pickFiles(
+                                        type: FileType.custom,
+                                        allowedExtensions: ['zip', 'cbz'],
+                                      );
+                                      if (res.isNotEmpty && res.first.path != null) {
+                                        final newPath = res.first.path!;
+                                        final newSize = File(newPath).existsSync() ? File(newPath).lengthSync() : 0;
+                                        await StorageService.replaceChapterFilePath(
+                                          oldPath: item.chapter.filePath,
+                                          newPath: newPath,
+                                          newSize: newSize,
+                                          isOptimized: newPath.toLowerCase().endsWith('.cbz'),
+                                        );
+                                        await _loadData();
+                                        Navigator.pop(ctx);
+                                        _showHealthCheckDialog();
+                                      }
+                                    },
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Закрыть')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _showDuplicateFinderDialog() async {
     final duplicates = StorageService.findDuplicateChapters(_allGroups);
     final primary = _settings.accentColor.color;
@@ -1203,10 +1432,28 @@ class _HomeScreenState extends State<HomeScreen> {
                                             icon: const Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
                                             visualDensity: VisualDensity.compact,
                                             onPressed: () async {
-                                              await StorageService.deleteDuplicateChapter(dup.groupId, dup.chapter.filePath);
-                                              await _loadData();
-                                              Navigator.pop(ctx);
-                                              _showDuplicateFinderDialog();
+                                              final confirmed = await showDialog<bool>(
+                                                context: ctx,
+                                                builder: (confirmCtx) => AlertDialog(
+                                                  title: const Text('Удалить архив с устройства?'),
+                                                  content: Text('${dup.chapter.filePath}\n\nУдаление возможно только при наличии точной копии. Это действие необратимо.'),
+                                                  actions: [
+                                                    TextButton(onPressed: () => Navigator.pop(confirmCtx, false), child: const Text('Отмена')),
+                                                    TextButton(onPressed: () => Navigator.pop(confirmCtx, true), child: const Text('Удалить')),
+                                                  ],
+                                                ),
+                                              );
+                                              if (confirmed != true || !mounted) return;
+                                              try {
+                                                await StorageService.deleteDuplicateChapter(dup.groupId, dup.chapter.filePath);
+                                                await _loadData();
+                                                if (!ctx.mounted) return;
+                                                Navigator.pop(ctx);
+                                                _showDuplicateFinderDialog();
+                                              } catch (error) {
+                                                if (!mounted) return;
+                                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Архив не удалён: $error')));
+                                              }
                                             },
                                           ),
                                         ],
@@ -1229,6 +1476,181 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  void _batchAssignAuthor() {
+    final controller = TextEditingController();
+    final primary = _settings.accentColor.color;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Назначить автора (${_selectedGroupIds.length})'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: 'Имя автора...',
+            filled: true,
+            fillColor: const Color(0xFF242833),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white),
+            onPressed: () async {
+              final author = controller.text.trim();
+              Navigator.pop(ctx);
+              await StorageService.assignAuthorToManga(
+                mangaIds: _selectedGroupIds.toList(),
+                authorName: author,
+              );
+              setState(() {
+                _selectedGroupIds.clear();
+              });
+              await _loadData();
+            },
+            child: const Text('Применить'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _batchChangeStatus() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Сменить статус (${_selectedGroupIds.length})'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: ReadingStatus.values.where((s) => s != ReadingStatus.none).map((st) {
+            return ListTile(
+              title: Text(st.label),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final groups = await StorageService.getMangaGroups();
+                final updated = groups.map((g) {
+                  if (_selectedGroupIds.contains(g.id)) {
+                    return g.copyWith(status: st, updatedAt: DateTime.now());
+                  }
+                  return g;
+                }).toList();
+                await StorageService.saveAllGroups(updated);
+                setState(() {
+                  _selectedGroupIds.clear();
+                });
+                await _loadData();
+              },
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  void _batchManageShelves() {
+    final primary = _settings.accentColor.color;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1B1E26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Полки для ${_selectedGroupIds.length} тайтлов'),
+            content: _customShelves.isEmpty
+                ? const Text('Пока нет созданных полок.')
+                : Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _customShelves.map((shelf) {
+                      return ActionChip(
+                        label: Text('Добавить в "$shelf"'),
+                        backgroundColor: primary.withValues(alpha: 0.2),
+                        side: BorderSide(color: primary.withValues(alpha: 0.4)),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          final groups = await StorageService.getMangaGroups();
+                          final updated = groups.map((g) {
+                            if (_selectedGroupIds.contains(g.id) && !g.shelves.contains(shelf)) {
+                              final newShelves = List<String>.from(g.shelves)..add(shelf);
+                              return g.copyWith(shelves: newShelves, updatedAt: DateTime.now());
+                            }
+                            return g;
+                          }).toList();
+                          await StorageService.saveAllGroups(updated);
+                          setState(() {
+                            _selectedGroupIds.clear();
+                          });
+                          await _loadData();
+                        },
+                      );
+                    }).toList(),
+                  ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _batchDelete() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Удалить ${_selectedGroupIds.length} тайтлов?'),
+        content: const Text('Выберите способ удаления. Удаление файлов с диска необратимо.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.orangeAccent),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              for (final id in _selectedGroupIds) {
+                await StorageService.removeMangaGroup(id);
+              }
+              setState(() {
+                _selectedGroupIds.clear();
+              });
+              await _loadData();
+            },
+            child: const Text('Только из библиотеки'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final groups = await StorageService.getMangaGroups();
+              for (final id in _selectedGroupIds) {
+                final g = groups.firstWhere((x) => x.id == id, orElse: () => groups.first);
+                for (final ch in g.chapters) {
+                  try {
+                    final f = File(ch.filePath);
+                    if (await f.exists()) await f.delete();
+                  } catch (_) {}
+                }
+                await StorageService.removeMangaGroup(id);
+              }
+              setState(() {
+                _selectedGroupIds.clear();
+              });
+              await _loadData();
+            },
+            child: const Text('Вместе с файлами'),
+          ),
+        ],
       ),
     );
   }
@@ -1720,7 +2142,39 @@ class _HomeScreenState extends State<HomeScreen> {
         onPressed: _pickAndOpenArchives,
         child: const Icon(Icons.add_rounded, size: 36),
       ),
-      appBar: AppBar(
+      appBar: _isMultiSelectMode
+          ? AppBar(
+              backgroundColor: const Color(0xFF1B1E26),
+              elevation: 2,
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => setState(() => _selectedGroupIds.clear()),
+              ),
+              title: Text('${_selectedGroupIds.length} выбрано'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.person_add_outlined),
+                  tooltip: 'Назначить автора',
+                  onPressed: _batchAssignAuthor,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.folder_special_outlined),
+                  tooltip: 'Полки и коллекции',
+                  onPressed: _batchManageShelves,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.bookmark_outline_rounded),
+                  tooltip: 'Сменить статус',
+                  onPressed: _batchChangeStatus,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+                  tooltip: 'Удалить выбранные',
+                  onPressed: _batchDelete,
+                ),
+              ],
+            )
+          : AppBar(
         backgroundColor: bg,
         elevation: 0,
         title: Row(
@@ -1772,7 +2226,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.more_vert),
             color: const Color(0xFF1B1E26),
             onSelected: (val) {
-              if (val == 'duplicates') {
+              if (val == 'health_check') {
+                _showHealthCheckDialog();
+              } else if (val == 'duplicates') {
                 _showDuplicateFinderDialog();
               } else if (val == 'reading_stats') {
                 _showReadingStatsDialog();
@@ -1791,6 +2247,16 @@ class _HomeScreenState extends State<HomeScreen> {
               }
             },
             itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'health_check',
+                child: Row(
+                  children: [
+                    Icon(Icons.health_and_safety_outlined, size: 18, color: Colors.tealAccent),
+                    SizedBox(width: 10),
+                    Text('Проверка целостности'),
+                  ],
+                ),
+              ),
               const PopupMenuItem(
                 value: 'duplicates',
                 child: Row(
@@ -1888,6 +2354,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Быстрые действия: Продолжить чтение и Случайный тайтл
+                        if (_allGroups.isNotEmpty)
+                          _buildQuickActionsBar(primary),
+
                         // Поиск
                         if (_allGroups.isNotEmpty) ...[
                           _buildSearchBar(),
@@ -2502,7 +2972,10 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: _settings.appTheme.cardColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        border: Border.all(
+          color: _selectedGroupIds.contains(group.id) ? primary : Colors.white.withValues(alpha: 0.08),
+          width: _selectedGroupIds.contains(group.id) ? 2.5 : 1,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.35),
@@ -2516,7 +2989,29 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: () => _openMangaDetail(group),
+            onTap: () {
+              if (_isMultiSelectMode) {
+                setState(() {
+                  if (_selectedGroupIds.contains(group.id)) {
+                    _selectedGroupIds.remove(group.id);
+                  } else {
+                    _selectedGroupIds.add(group.id);
+                  }
+                });
+              } else {
+                _openMangaDetail(group);
+              }
+            },
+            onLongPress: () {
+              setState(() {
+                if (_selectedGroupIds.contains(group.id)) {
+                  _selectedGroupIds.remove(group.id);
+                } else {
+                  _selectedGroupIds.add(group.id);
+                }
+              });
+              HapticFeedback.selectionClick();
+            },
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -2533,6 +3028,21 @@ class _HomeScreenState extends State<HomeScreen> {
                         )
                       else
                         _buildFallbackCover(primary),
+
+                      if (_selectedGroupIds.contains(group.id))
+                        Container(
+                          color: primary.withValues(alpha: 0.35),
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: primary,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.check, color: Colors.white, size: 28),
+                            ),
+                          ),
+                        ),
 
                       // Градиент снизу
                       Positioned(

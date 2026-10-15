@@ -273,6 +273,155 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     );
   }
 
+  List<int> _detectChapterGaps(List<ChapterItem> chapters) {
+    final nums = <int>[];
+    for (final ch in chapters) {
+      final matches = RegExp(r'(?:ch|chapter|глава|том|vol)?\s*(\d+)', caseSensitive: false).allMatches(ch.title);
+      if (matches.isNotEmpty) {
+        final parsed = int.tryParse(matches.last.group(1) ?? '');
+        if (parsed != null) nums.add(parsed);
+      }
+    }
+    if (nums.length < 2) return [];
+    final gaps = <int>[];
+    for (int i = 0; i < nums.length - 1; i++) {
+      final diff = nums[i + 1] - nums[i];
+      if (diff > 1 && diff < 15) {
+        for (int m = nums[i] + 1; m < nums[i + 1]; m++) {
+          gaps.add(m);
+        }
+      }
+    }
+    return gaps;
+  }
+
+  void _showChapterReorderDialog() {
+    final reordered = List<ChapterItem>.from(_manga.chapters);
+    final primary = widget.settings.accentColor.color;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF161920),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final gaps = _detectChapterGaps(reordered);
+
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(context).size.height * 0.8,
+              child: Column(
+                children: [
+                  Container(
+                    margin: const EdgeInsets.symmetric(vertical: 10),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Порядок и структура глав',
+                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                        ),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primary,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onPressed: () async {
+                            final currentId = _manga.currentChapter?.id;
+                            final newIdx = reordered.indexWhere((c) => c.id == currentId);
+                            final updated = _manga.copyWith(
+                              chapters: reordered,
+                              currentChapterIndex: newIdx >= 0 ? newIdx : 0,
+                              updatedAt: DateTime.now(),
+                            );
+                            await StorageService.saveMangaGroup(updated);
+                            await _refresh();
+                            if (ctx.mounted) Navigator.pop(ctx);
+                          },
+                          child: const Text('Сохранить'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (gaps.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, size: 20, color: Colors.amber),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Возможный пропуск глав: ${gaps.map((g) => '#$g').join(", ")}',
+                              style: const TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Expanded(
+                    child: ReorderableListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      itemCount: reordered.length,
+                      onReorder: (oldIndex, newIndex) {
+                        setSheetState(() {
+                          if (oldIndex < newIndex) newIndex -= 1;
+                          final item = reordered.removeAt(oldIndex);
+                          reordered.insert(newIndex, item);
+                        });
+                      },
+                      itemBuilder: (ctx, idx) {
+                        final ch = reordered[idx];
+                        return ListTile(
+                          key: ValueKey(ch.id),
+                          leading: ReorderableDragStartListener(
+                            index: idx,
+                            child: const Icon(Icons.drag_handle_rounded, color: Colors.white54),
+                          ),
+                          title: Text(
+                            ch.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Text(
+                            '${idx + 1} в списке • ${ch.totalPages > 0 ? "${ch.totalPages} стр." : "архив"}',
+                            style: const TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                          trailing: SizedBox(
+                            width: 32,
+                            height: 44,
+                            child: MangaArchiveThumbnail(archivePath: ch.filePath, width: 32, height: 44),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _showCoverPicker() async {
     showModalBottomSheet(
       context: context,
@@ -331,6 +480,53 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
   Future<void> _pickPageFromChapterAsCover() async {
     if (_manga.chapters.isEmpty) return;
 
+    ChapterItem targetChapter = _manga.chapters.first;
+    if (_manga.chapters.length > 1) {
+      final chosen = await showModalBottomSheet<ChapterItem>(
+        context: context,
+        backgroundColor: const Color(0xFF1B1E26),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Выберите главу для поиска обложки:',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _manga.chapters.length,
+                  itemBuilder: (ctx, idx) {
+                    final ch = _manga.chapters[idx];
+                    return ListTile(
+                      dense: true,
+                      leading: SizedBox(
+                        width: 32,
+                        height: 44,
+                        child: MangaArchiveThumbnail(archivePath: ch.filePath, width: 32, height: 44),
+                      ),
+                      title: Text(ch.title),
+                      onTap: () => Navigator.pop(ctx, ch),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (chosen == null || !mounted) return;
+      targetChapter = chosen;
+    }
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -338,8 +534,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     );
 
     try {
-      final firstChapter = _manga.chapters.first;
-      final info = await ArchiveService.loadManga(firstChapter.filePath);
+      final info = await ArchiveService.loadManga(targetChapter.filePath);
       if (!mounted) return;
       Navigator.pop(context);
 
@@ -633,6 +828,11 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                   ),
                 ),
                 actions: [
+                  IconButton(
+                    icon: const Icon(Icons.low_priority_rounded),
+                    tooltip: 'Порядок и структура глав',
+                    onPressed: _showChapterReorderDialog,
+                  ),
                   IconButton(
                     icon: const Icon(Icons.edit_outlined),
                     tooltip: 'Редактировать',

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/reader_models.dart';
@@ -78,17 +79,9 @@ class StorageService {
       for (final item in groupJsonList) {
         try {
           final group = MangaGroup.fromJson(item);
-          if (group.chapters.isEmpty) {
-            groups.add(group);
-          } else {
-            // Сохраняем группу, фильтруя удаленные файлы, если часть еще существует
-            final validChapters = group.chapters.where((c) => File(c.filePath).existsSync()).toList();
-            if (validChapters.isNotEmpty) {
-              groups.add(group.copyWith(chapters: validChapters));
-            } else {
-              groups.add(group);
-            }
-          }
+          // Недоступность файла не означает удаление из коллекции:
+          // разрешение или внешний накопитель могут временно отсутствовать.
+          groups.add(group);
         } catch (_) {}
       }
       groups.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
@@ -109,7 +102,7 @@ class StorageService {
   /// Сохранить полный список групп
   static Future<void> saveAllGroups(List<MangaGroup> groups) async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonList = groups.take(100).map((g) => g.toJson()).toList();
+    final jsonList = groups.map((g) => g.toJson()).toList();
     await prefs.setStringList(_keyMangaGroups, jsonList);
   }
 
@@ -551,19 +544,23 @@ class StorageService {
   }
 
   /// Загрузить сохраненные закладки для тайтла
-  static Future<Set<int>> loadBookmarks(String mangaId) async {
+  static String _bookmarkKey(String mangaId, String? chapterId) => chapterId == null
+      ? '${_keyBookmarks}_$mangaId'
+      : '${_keyBookmarks}_v2_${json.encode([mangaId, chapterId])}';
+
+  static Future<Set<int>> loadBookmarks(String mangaId, {String? chapterId}) async {
     final prefs = await SharedPreferences.getInstance();
-    final key = '${_keyBookmarks}_$mangaId';
-    final list = prefs.getStringList(key);
+    final list = prefs.getStringList(_bookmarkKey(mangaId, chapterId));
     if (list == null) return {};
-    return list.map((e) => int.tryParse(e) ?? 0).toSet();
+    return list.map(int.tryParse).whereType<int>().where((page) => page >= 0).toSet();
   }
 
   /// Добавить или убрать страницу из закладок
-  static Future<bool> toggleBookmark(String mangaId, int pageIndex) async {
+  static Future<bool> toggleBookmark(String mangaId, int pageIndex, {String? chapterId}) async {
+    if (pageIndex < 0) throw ArgumentError.value(pageIndex, 'pageIndex');
     final prefs = await SharedPreferences.getInstance();
-    final key = '${_keyBookmarks}_$mangaId';
-    final current = await loadBookmarks(mangaId);
+    final key = _bookmarkKey(mangaId, chapterId);
+    final current = await loadBookmarks(mangaId, chapterId: chapterId);
     bool added = false;
     if (current.contains(pageIndex)) {
       current.remove(pageIndex);
@@ -662,22 +659,48 @@ class StorageService {
         .toList();
   }
 
-  /// Удалить дублирующую главу
+  /// Удаление разрешено только при наличии другой побайтово одинаковой копии.
+  /// Ошибки файловой операции не должны приводить к потере записи библиотеки.
   static Future<void> deleteDuplicateChapter(String groupId, String filePath) async {
     final groups = await getMangaGroups();
     final idx = groups.indexWhere((g) => g.id == groupId);
-    if (idx != -1) {
-      final group = groups[idx];
-      final newChapters = group.chapters.where((c) => c.filePath != filePath).toList();
-      final updated = group.copyWith(chapters: newChapters, updatedAt: DateTime.now());
-      await saveMangaGroup(updated);
+    if (idx == -1 || !groups[idx].chapters.any((c) => c.filePath == filePath)) {
+      throw StateError('Глава больше не находится в выбранном тайтле.');
     }
-    try {
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+    final file = File(filePath);
+    final resolved = await file.resolveSymbolicLinks();
+    final size = await file.length();
+    final digest = await sha256.bind(file.openRead()).first;
+    bool hasCopy = false;
+    for (final group in groups) {
+      for (final chapter in group.chapters) {
+        if (group.id == groupId && chapter.filePath == filePath) continue;
+        final candidate = File(chapter.filePath);
+        if (!await candidate.exists()) continue;
+        final otherResolved = await candidate.resolveSymbolicLinks();
+        if (otherResolved == resolved) {
+          throw StateError('Этот файл используется другой записью. Удаление отменено.');
+        }
+        if (await candidate.length() == size &&
+            await sha256.bind(candidate.openRead()).first == digest) {
+          hasCopy = true;
+        }
       }
-    } catch (_) {}
+    }
+    if (!hasCopy) {
+      throw StateError('Точная копия не найдена. Совпадения названий недостаточно для удаления.');
+    }
+    await file.delete();
+    final group = groups[idx];
+    final currentId = group.currentChapter?.id;
+    final chapters = group.chapters.where((c) => c.filePath != filePath).toList();
+    final currentIndex = chapters.indexWhere((c) => c.id == currentId);
+    groups[idx] = group.copyWith(
+      chapters: chapters,
+      currentChapterIndex: currentIndex < 0 ? 0 : currentIndex,
+      updatedAt: DateTime.now(),
+    );
+    await saveAllGroups(groups);
   }
 
   /// Агрегировать список авторов со всеми тайтлами, обложками и тегами
@@ -864,14 +887,25 @@ class StorageService {
     return importedCount;
   }
 
-  /// Экспорт всей библиотеки и настроек в JSON файл в Загрузки/NeManga
+  /// Экспорт всей библиотеки и настроек в JSON файл в Загрузки/NeManga (версия 2 с полками, тегами и блеклистами)
   static Future<String> exportBackupToJson() async {
     final groups = await getMangaGroups();
     final settings = await loadSettings();
+    final shelves = await loadCustomShelves();
+    final authorTags = await loadAllAuthorTags();
+    final authorBlacklist = await loadAuthorBlacklist();
+    final titleCleanup = await loadTitleCleanupPatterns();
+    final readingStats = await loadReadingStats();
+
     final data = {
-      'version': 1,
+      'version': 2,
       'exportedAt': DateTime.now().toIso8601String(),
       'settings': settings.toMap(),
+      'shelves': shelves,
+      'authorTags': authorTags,
+      'authorBlacklist': authorBlacklist,
+      'titleCleanupPatterns': titleCleanup,
+      'readingStats': readingStats.toMap(),
       'groups': groups.map((g) => g.toMap()).toList(),
     };
 
@@ -901,6 +935,41 @@ class StorageService {
       try {
         final s = ReaderSettings.fromMap(data['settings'] as Map<String, dynamic>);
         await saveSettings(s);
+      } catch (_) {}
+    }
+
+    if (data['shelves'] != null) {
+      try {
+        await saveCustomShelves(List<String>.from(data['shelves']));
+      } catch (_) {}
+    }
+
+    if (data['authorTags'] != null) {
+      try {
+        final Map<String, dynamic> map = data['authorTags'];
+        for (final entry in map.entries) {
+          await saveAuthorTags(entry.key, List<String>.from(entry.value ?? []));
+        }
+      } catch (_) {}
+    }
+
+    if (data['authorBlacklist'] != null) {
+      try {
+        await saveAuthorBlacklist(List<String>.from(data['authorBlacklist']));
+      } catch (_) {}
+    }
+
+    if (data['titleCleanupPatterns'] != null) {
+      try {
+        await saveTitleCleanupPatterns(List<String>.from(data['titleCleanupPatterns']));
+      } catch (_) {}
+    }
+
+    if (data['readingStats'] != null) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final stats = ReadingUserStats.fromMap(data['readingStats'] as Map<String, dynamic>);
+        await prefs.setString(_keyReadingStats, stats.toJson());
       } catch (_) {}
     }
 

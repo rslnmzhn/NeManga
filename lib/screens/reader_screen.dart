@@ -178,6 +178,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
     _initAspectRatios();
     _initDisplayPages();
+    _pageController.dispose();
+    _pageController = PageController(initialPage: _displayIndexForPage(_currentPage));
     _loadBookmarks();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _precacheUpcomingPages(_currentPage);
@@ -218,8 +220,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _loadBookmarks() async {
-    final mangaId = widget.mangaGroup?.id ?? widget.title;
-    final b = await StorageService.loadBookmarks(mangaId);
+    final mangaId = widget.mangaGroup?.id ?? widget.archivePath;
+    final b = await StorageService.loadBookmarks(mangaId, chapterId: widget.archivePath);
     if (mounted) {
       setState(() {
         _bookmarkedPages = b;
@@ -227,10 +229,56 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  Future<void> _showBookmarks() async {
+    _hideControlsTimer?.cancel();
+    final mangaId = widget.mangaGroup?.id ?? widget.archivePath;
+    final legacy = await StorageService.loadBookmarks(mangaId);
+    if (!mounted) return;
+    final pages = _bookmarkedPages.where((page) => page < widget.pagePaths.length).toList()..sort();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.7,
+          child: Column(children: [
+            const ListTile(title: Text('Закладки текущей главы')),
+            if (legacy.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text('Старые закладки сохранены отдельно: ${(legacy.toList()..sort()).map((p) => p + 1).join(", ")}. В старом формате глава не указана; автоматическое перенесение небезопасно.'),
+              ),
+            Expanded(
+              child: pages.isEmpty
+                  ? const Center(child: Text('В этой главе пока нет закладок'))
+                  : GridView.builder(
+                      padding: const EdgeInsets.all(12),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.65, crossAxisSpacing: 8, mainAxisSpacing: 8),
+                      itemCount: pages.length,
+                      itemBuilder: (_, index) {
+                        final page = pages[index];
+                        return InkWell(
+                          onTap: () { Navigator.pop(sheetContext); _goToPage(page); },
+                          child: Column(children: [
+                            Expanded(child: Image.file(File(widget.pagePaths[page]), cacheWidth: 240, fit: BoxFit.contain,
+                              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined))),
+                            Text('Страница ${page + 1}'),
+                          ]),
+                        );
+                      },
+                    ),
+            ),
+          ]),
+        ),
+      ),
+    );
+    if (mounted) _scheduleHideControls();
+  }
+
   Future<void> _toggleBookmarkOnCurrentPage() async {
-    final mangaId = widget.mangaGroup?.id ?? widget.title;
-    final added = await StorageService.toggleBookmark(mangaId, _currentPage);
-    final b = await StorageService.loadBookmarks(mangaId);
+    final mangaId = widget.mangaGroup?.id ?? widget.archivePath;
+    final added = await StorageService.toggleBookmark(mangaId, _currentPage, chapterId: widget.archivePath);
+    final b = await StorageService.loadBookmarks(mangaId, chapterId: widget.archivePath);
     if (mounted) {
       setState(() {
         _bookmarkedPages = b;
@@ -500,106 +548,50 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  bool get _usesPairs => _settings.dualPage &&
+      _settings.mode != ReaderMode.verticalPage && _settings.mode != ReaderMode.webtoon;
+
+  int _displayIndexForPage(int page) {
+    if (_usesPairs) return page ~/ 2;
+    final index = _displayPages.indexWhere((item) => item.fileIndex == page);
+    return index < 0 ? 0 : index;
+  }
+
   void _goToPage(int page) {
+    if (widget.pagePaths.isEmpty) return;
     final target = page.clamp(0, widget.pagePaths.length - 1);
-    setState(() {
-      _currentPage = target;
-    });
-
+    setState(() { _currentPage = target; });
     _vibrate();
-
     if (_settings.mode == ReaderMode.webtoon) {
       _jumpToWebtoonPage(target);
-    } else {
-      if (_pageController.hasClients) {
-        if (_settings.dualPage && _settings.mode != ReaderMode.verticalPage) {
-          final pairIdx = (target / 2).floor();
-          _pageController.jumpToPage(pairIdx);
-        } else {
-          _pageController.jumpToPage(target);
-        }
-      }
+    } else if (_pageController.hasClients) {
+      _pageController.jumpToPage(_displayIndexForPage(target));
     }
     _saveCurrentProgress();
   }
 
-  void _nextPage() {
-    _vibrate();
-    if (_settings.mode == ReaderMode.webtoon) {
-      if (!_webtoonScrollController.hasClients) return;
-      final step = MediaQuery.of(context).size.height * 0.85;
-      _webtoonScrollController.animateTo(
-        (_webtoonScrollController.offset + step).clamp(
-          0.0,
-          _webtoonScrollController.position.maxScrollExtent,
-        ),
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
-    } else {
-      if (_settings.dualPage && _settings.mode != ReaderMode.verticalPage) {
-        final pairCount = (widget.pagePaths.length / 2).ceil();
-        final currentPair = (_currentPage / 2).floor();
-        if (currentPair < pairCount - 1) {
-          _pageController.nextPage(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        } else if (widget.mangaGroup != null &&
-            widget.currentChapterIndex < widget.mangaGroup!.chapters.length - 1) {
-          _pageController.nextPage(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        }
-      } else {
-        if (_currentPage < widget.pagePaths.length - 1) {
-          _pageController.nextPage(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        } else if (widget.mangaGroup != null &&
-            widget.currentChapterIndex < widget.mangaGroup!.chapters.length - 1) {
-          _pageController.nextPage(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        }
-      }
-    }
-  }
+  void _nextPage() => _stepPage(1);
+  void _prevPage() => _stepPage(-1);
 
-  void _prevPage() {
+  void _stepPage(int direction) {
     _vibrate();
     if (_settings.mode == ReaderMode.webtoon) {
       if (!_webtoonScrollController.hasClients) return;
-      final step = MediaQuery.of(context).size.height * 0.85;
+      final step = MediaQuery.of(context).size.height * 0.85 * direction;
       _webtoonScrollController.animateTo(
-        (_webtoonScrollController.offset - step).clamp(
-          0.0,
-          _webtoonScrollController.position.maxScrollExtent,
-        ),
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
+        (_webtoonScrollController.offset + step).clamp(0.0, _webtoonScrollController.position.maxScrollExtent),
+        duration: const Duration(milliseconds: 250), curve: Curves.easeOut,
       );
-    } else {
-      if (_settings.dualPage && _settings.mode != ReaderMode.verticalPage) {
-        final currentPair = (_currentPage / 2).floor();
-        if (currentPair > 0) {
-          _pageController.previousPage(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        }
-      } else {
-        if (_currentPage > 0) {
-          _pageController.previousPage(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        }
-      }
+      return;
     }
+    if (!_pageController.hasClients) return;
+    final pages = _usesPairs ? (widget.pagePaths.length / 2).ceil() : _displayPages.length;
+    final count = pages + (widget.mangaGroup != null ? 1 : 0);
+    if (count == 0) return;
+    final current = (_pageController.page ?? _displayIndexForPage(_currentPage).toDouble()).round();
+    final target = (current + direction).clamp(0, count - 1);
+    if (target == current) return;
+    _pageController.animateToPage(target, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
   }
 
   Future<void> _switchChapter(int targetIndex) async {
@@ -744,10 +736,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
           setState(() {
             _settings = newSettings;
             _initDisplayPages();
-            // Пересоздаем контроллер для синхронизации страницы
-            if (_pageController.hasClients && _currentPage != _pageController.page?.round()) {
-              _pageController = PageController(initialPage: _currentPage);
-            }
+            final oldController = _pageController;
+            _pageController = PageController(initialPage: _displayIndexForPage(_currentPage));
+            WidgetsBinding.instance.addPostFrameCallback((_) { oldController.dispose(); });
           });
           StorageService.saveSettings(newSettings);
         },
@@ -1460,6 +1451,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
             tooltip: _bookmarkedPages.contains(_currentPage) ? 'Удалить закладку' : 'В закладки',
             onPressed: _toggleBookmarkOnCurrentPage,
+            onLongPress: _showBookmarks,
           ),
           IconButton(
             icon: const Icon(Icons.download_rounded, color: Colors.white),
